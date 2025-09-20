@@ -16,7 +16,7 @@ Learn your target languge by reading visual novels
 
 ## Installation
 
-Download the executable from itch.io or the releases page
+Download the latest executable from the [releases page](https://github.com/cesar-bravo-m/VisualNovelCompanion/releases/tag/major)
 
 ## Settings
 

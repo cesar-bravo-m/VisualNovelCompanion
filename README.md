@@ -1,6 +1,6 @@
 # Visual Novel Companion (VNC)
 
-Learn your target languge by reading visual novels
+Learn your target language by reading visual novels. Translate dialog, extract vocabulary, export it to Anki or review it in-app with context.
 
 ## Translation
 
@@ -16,7 +16,7 @@ Learn your target languge by reading visual novels
 
 ## Installation
 
-Download the latest executable from the [releases page](https://github.com/cesar-bravo-m/VisualNovelCompanion/releases/tag/major)
+Download the latest executable from the [releases page](https://github.com/cesar-bravo-m/VisualNovelCompanion/releases/tag/major) or [itch.io](https://cesar-bravo-m.itch.io/visual-novel-companion)
 
 ## Settings
 
@@ -40,4 +40,4 @@ OCR uses Windows' built-in OCR model and sends the result for processing to the 
 
 ## Caveats
 
-There is vocabulary persistence yet. Export your lists to CSV or Anki after every play session.
+There is no vocabulary persistence yet. Export your lists to CSV or Anki after every play session.

@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "VNC (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "VNC (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

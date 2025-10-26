@@ -4,7 +4,7 @@ Learn your target language by reading visual novels. Translate dialog, extract v
 
 ## Translation
 
-<img width="2662" height="1443" alt="image" src="https://github.com/user-attachments/assets/ce59a474-121d-45d2-8985-25cdc2757d76" />
+<img width="2635" height="1179" alt="image" src="https://github.com/user-attachments/assets/710547ed-ce2d-4341-be62-f74325d847c6" />
 
 ## Export vocabulary lists to Anki or CSV.
 

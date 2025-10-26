@@ -162,6 +162,37 @@ public static class NativeInterop
     public static extern bool GetCursorPos(out Windows.Graphics.PointInt32 lpPoint);
 
     [DllImport("User32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
+
+    [DllImport("User32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr SetCursor(IntPtr hCursor);
+
+    [DllImport("User32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr GetCursor();
+
+    // Standard cursor constants
+    public const int IDC_ARROW = 32512;
+    public const int IDC_SIZENWSE = 32642;  // Top-left to bottom-right
+    public const int IDC_SIZENESW = 32643;  // Top-right to bottom-left
+    public const int IDC_SIZEWE = 32644;    // Left-right
+    public const int IDC_SIZENS = 32645;    // Top-bottom
+    
+    // Window message constants
+    public const int WM_SETCURSOR = 0x0020;
+    public const int HTCLIENT = 1;
+    
+    // For subclassing
+    public delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    
+    [DllImport("User32.dll", SetLastError = true)]
+    public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+    
+    [DllImport("User32.dll", SetLastError = true)]
+    public static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    
+    public const int GWLP_WNDPROC = -4;
+
+    [DllImport("User32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
 
     public const int RDW_INVALIDATE = 0x0001;

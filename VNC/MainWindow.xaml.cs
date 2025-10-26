@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
 using Microsoft.UI.Xaml.Media;
@@ -98,6 +99,18 @@ public sealed partial class MainWindow : Window
 
     private const uint SRCCOPY = 0x00CC0020;
 
+    // Window management constants
+    private const int WM_NCLBUTTONDOWN = 0x00A1;
+    private const int HTCAPTION = 0x0002;
+    private const int SW_MINIMIZE = 6;
+    private const int SW_MAXIMIZE = 3;
+    private const int SW_RESTORE = 9;
+    private const int SW_SHOWMAXIMIZED = 3;
+    private const int GWL_STYLE = -16;
+    private const int WS_THICKFRAME = 0x00040000;
+    private const int WS_MAXIMIZEBOX = 0x00010000;
+    private const int WS_MINIMIZEBOX = 0x00020000;
+
     public const int ICON_SMALL = 0;  
     public const int ICON_BIG = 1;  
     public const int ICON_SMALL2 = 2;  
@@ -106,7 +119,36 @@ public sealed partial class MainWindow : Window
     public const int WM_SETICON = 0x0080;  
 
     [DllImport("User32.dll", SetLastError = true, CharSet = CharSet.Auto)]  
-    public static extern int SendMessage(IntPtr hWnd, uint msg, int wParam, IntPtr lParam);  
+    public static extern int SendMessage(IntPtr hWnd, uint msg, int wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessage")]
+    private static extern IntPtr SendMessageForDrag(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WINDOWPLACEMENT
+    {
+        public int length;
+        public int flags;
+        public int showCmd;
+        public System.Drawing.Point ptMinPosition;
+        public System.Drawing.Point ptMaxPosition;
+        public System.Drawing.Rectangle rcNormalPosition;
+    }  
 
     public MainWindow()
     {
@@ -117,17 +159,24 @@ public sealed partial class MainWindow : Window
         Microsoft.UI.WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(_hwnd);
         _appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
 
-        // Configure window presenter
+        // Configure window presenter - disable native title bar, enable resizing
         _presenter = _appWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter;
         _presenter.IsResizable = true;
+        _presenter.IsMaximizable = true;
+        _presenter.IsMinimizable = true;
         _presenter.SetBorderAndTitleBar(true, false);
 
-        // Set initial window size and position
-        // _appWindow.Resize(new Windows.Graphics.SizeInt32(800, 500));
-        // _appWindow.Move(new Windows.Graphics.PointInt32(500, 300));
+        // Set initial window size
+        _appWindow.Resize(new Windows.Graphics.SizeInt32(1920, 1080));
+
+        // Ensure window has proper styles for resizing on all edges
+        EnsureWindowResizable();
 
         // Set window corner preference for Windows 11
         SetWindowCornerPreference();
+        
+        // Update maximize/restore button icon based on current state
+        UpdateMaximizeRestoreButton();
 
         // Initialize DirectX rendering
         InitializeDirectX();
@@ -144,6 +193,10 @@ public sealed partial class MainWindow : Window
         LogDataGrid.ItemsSource = _logEntries;
 
         this.Closed += MainWindow_Closed;
+
+        // Wire up the GridSplitter columns
+        ColumnSplitter.LeftColumn = TransparentColumn;
+        ColumnSplitter.RightColumn = LlmColumn;
 
         _ = LoadSettingsAsync();
     }
@@ -173,24 +226,72 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Failed to load settings: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"Failed to load settings: {ex.Message}");
         }
     }
+
+    #region Custom Title Bar Handlers
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Minimize window using Win32 API
+        ShowWindow(_hwnd, SW_MINIMIZE);
+    }
+
+    private void MaximizeRestoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Toggle between maximized and normal state
+        if (IsWindowMaximized())
+        {
+            ShowWindow(_hwnd, SW_RESTORE);
+        }
+        else
+        {
+            ShowWindow(_hwnd, SW_MAXIMIZE);
+        }
+        UpdateMaximizeRestoreButton();
+    }
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        this.Close();
+    }
+
+    private void UpdateMaximizeRestoreButton()
+    {
+        if (IsWindowMaximized())
+        {
+            MaximizeRestoreButton.Content = "\uE923"; // Restore icon
+            ToolTipService.SetToolTip(MaximizeRestoreButton, "Restore Down");
+        }
+        else
+        {
+            MaximizeRestoreButton.Content = "\uE922"; // Maximize icon
+            ToolTipService.SetToolTip(MaximizeRestoreButton, "Maximize");
+        }
+    }
+
+    private bool IsWindowMaximized()
+    {
+        WINDOWPLACEMENT placement = new WINDOWPLACEMENT();
+        placement.length = Marshal.SizeOf(placement);
+        GetWindowPlacement(_hwnd, ref placement);
+        return placement.showCmd == SW_SHOWMAXIMIZED;
+    }
+
+    #endregion
 
 
     private async void LlmAnalysisButton_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            LlmAnalysisButton.IsEnabled = false;
+        LlmAnalysisButton.IsEnabled = false;
             LlmAnalysisButton.Content = "Processing...";
-            StatusText.Text = "Capturing screenshot from transparent area...";
 
             // Get the screen coordinates of the SwapChainPanel
             var panelBounds = GetSwapChainPanelScreenBounds();
             if (panelBounds.Width <= 0 || panelBounds.Height <= 0)
             {
-                StatusText.Text = "Invalid capture area. Please ensure the window is visible.";
                 LlmResultTextBox.Text = "Could not determine the capture area bounds.";
                 return;
             }
@@ -199,12 +300,10 @@ public sealed partial class MainWindow : Window
             var capturedBitmap = CaptureScreenRegion(panelBounds);
             if (capturedBitmap == null)
             {
-                StatusText.Text = "Failed to capture screenshot.";
                 LlmResultTextBox.Text = "Screenshot capture failed. Please try again.";
-                return;
-            }
+            return;
+        }
 
-            StatusText.Text = "Sending image to LLM for analysis...";
             LlmResultTextBox.Text = "Processing...";
 
             // Reload settings to get the latest values
@@ -226,7 +325,6 @@ public sealed partial class MainWindow : Window
             if (_appSettings.Intelligence == "managed")
             {
                 // Use managed service - only IMAGE mode is supported
-                StatusText.Text = "Sending image to managed service for analysis...";
                 var base64Image = ConvertBitmapToBase64(capturedBitmap);
                 llmResult = await ManagedClient.AnalyzeImageAsync(base64Image, "http://172.178.84.127:8080");
             }
@@ -236,12 +334,9 @@ public sealed partial class MainWindow : Window
                 // Check if OCR mode is enabled
                 if (_appSettings.Model == "OCR")
                 {
-                    StatusText.Text = "Extracting text using OCR...";
-                    
                     // Check if OCR is available
                     if (!OcrService.IsOcrAvailable())
                     {
-                        StatusText.Text = "OCR is not available on this system.";
                         LlmResultTextBox.Text = "OCR functionality is not available on this system. Please ensure Windows OCR features are installed.";
                         capturedBitmap.Dispose();
                         return;
@@ -255,7 +350,6 @@ public sealed partial class MainWindow : Window
                     }
                     catch (Exception ex)
                     {
-                        StatusText.Text = $"OCR failed: {ex.Message}";
                         LlmResultTextBox.Text = $"OCR extraction failed: {ex.Message}";
                         capturedBitmap.Dispose();
                         return;
@@ -263,13 +357,10 @@ public sealed partial class MainWindow : Window
                     
                     if (string.IsNullOrWhiteSpace(extractedText))
                     {
-                        StatusText.Text = "No text detected in the captured area.";
                         LlmResultTextBox.Text = "No text was detected in the captured area. Please try capturing a different region or switch to Image mode.";
                         capturedBitmap.Dispose();
                         return;
                     }
-                    
-                    StatusText.Text = "Sending extracted text to LLM for translation...";
                     
                     // Send extracted text to LLM
                     llmResult = await TogetherClient.AnalyzeTextAsync(
@@ -360,7 +451,6 @@ public sealed partial class MainWindow : Window
                 WordTableScrollViewer.Visibility = Visibility.Collapsed;
             }
 
-            StatusText.Text = "Translation complete.";
             capturedBitmap.Dispose();
         }
         catch (Exception ex)
@@ -374,7 +464,6 @@ public sealed partial class MainWindow : Window
             };
 
             await dialog.ShowAsync();
-            StatusText.Text = "LLM analysis failed.";
             LlmResultTextBox.Text = $"LLM analysis failed: {ex.Message}";
         }
         finally
@@ -842,6 +931,29 @@ public sealed partial class MainWindow : Window
     #region Transparency and DirectX Methods
 
     /// <summary>
+    /// Ensures the window has proper styles for resizing on all edges and corners.
+    /// </summary>
+    private void EnsureWindowResizable()
+    {
+        try
+        {
+            // Get current window style
+            int style = GetWindowLong(_hwnd, GWL_STYLE);
+            
+            // Ensure the window has thick frame (resizable border) and maximize/minimize boxes
+            style |= WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX;
+            
+            // Set the updated style
+            SetWindowLong(_hwnd, GWL_STYLE, style);
+        }
+        catch (Exception ex)
+        {
+            // Log error if needed, but don't crash
+            System.Diagnostics.Debug.WriteLine($"Failed to set window style: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Sets the window corner preference for Windows 11 styling.
     /// </summary>
     private void SetWindowCornerPreference()
@@ -885,6 +997,325 @@ public sealed partial class MainWindow : Window
             null!);
 
         _transparencyManager.InitializeTransparency();
+        
+        // Attach resize handlers to the border elements
+        AttachResizeHandlers();
+        
+        // Initialize cursor timer to continuously update cursor
+        InitializeCursorTimer();
+        
+        // Hook window procedure to intercept WM_SETCURSOR
+        HookWindowProc();
+    }
+    
+    /// <summary>
+    /// Hooks into the window procedure to intercept WM_SETCURSOR messages.
+    /// </summary>
+    private void HookWindowProc()
+    {
+        _newWndProc = new NativeInterop.WndProcDelegate(WndProc);
+        _oldWndProc = NativeInterop.SetWindowLongPtr(_hwnd, NativeInterop.GWLP_WNDPROC, 
+            Marshal.GetFunctionPointerForDelegate(_newWndProc));
+    }
+    
+    /// <summary>
+    /// Custom window procedure to intercept cursor changes.
+    /// </summary>
+    private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        if (msg == NativeInterop.WM_SETCURSOR)
+        {
+            // If we have a custom cursor set, use it
+            if (_currentCursor != IntPtr.Zero)
+            {
+                NativeInterop.SetCursor(_currentCursor);
+                return new IntPtr(1); // Return TRUE to prevent default processing
+            }
+        }
+        
+        // Call the original window procedure
+        return NativeInterop.CallWindowProc(_oldWndProc, hWnd, msg, wParam, lParam);
+    }
+    
+    /// <summary>
+    /// Initializes a timer to continuously update the cursor.
+    /// </summary>
+    private void InitializeCursorTimer()
+    {
+        _cursorTimer = new DispatcherTimer();
+        _cursorTimer.Interval = TimeSpan.FromMilliseconds(10);
+        _cursorTimer.Tick += (s, e) =>
+        {
+            if (_isResizing)
+            {
+                UpdateCurrentCursor(_resizeDirection);
+            }
+            else if (_currentHoverDirection != ResizeDirection.None)
+            {
+                UpdateCurrentCursor(_currentHoverDirection);
+            }
+            else
+            {
+                UpdateCurrentCursor(ResizeDirection.None);
+            }
+        };
+        _cursorTimer.Start();
+    }
+    
+    /// <summary>
+    /// Updates the current cursor based on direction.
+    /// </summary>
+    private void UpdateCurrentCursor(ResizeDirection direction)
+    {
+        IntPtr newCursor = direction switch
+        {
+            ResizeDirection.Left or ResizeDirection.Right => 
+                NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_SIZEWE),
+            ResizeDirection.Top or ResizeDirection.Bottom => 
+                NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_SIZENS),
+            ResizeDirection.TopLeft or ResizeDirection.BottomRight => 
+                NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_SIZENWSE),
+            ResizeDirection.TopRight or ResizeDirection.BottomLeft => 
+                NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_SIZENESW),
+            _ => IntPtr.Zero // Let default cursor show
+        };
+        
+        if (_currentCursor != newCursor)
+        {
+            _currentCursor = newCursor;
+            if (_currentCursor != IntPtr.Zero)
+            {
+                NativeInterop.SetCursor(_currentCursor);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Attaches resize event handlers to the invisible border elements.
+    /// </summary>
+    private void AttachResizeHandlers()
+    {
+        // Attach to edges
+        ResizeTop.PointerPressed += (s, e) => StartResize(ResizeDirection.Top, e);
+        ResizeTop.PointerEntered += (s, e) => { _currentHoverDirection = ResizeDirection.Top; };
+        ResizeTop.PointerExited += (s, e) => { _currentHoverDirection = ResizeDirection.None; };
+        
+        ResizeBottom.PointerPressed += (s, e) => StartResize(ResizeDirection.Bottom, e);
+        ResizeBottom.PointerEntered += (s, e) => { _currentHoverDirection = ResizeDirection.Bottom; };
+        ResizeBottom.PointerExited += (s, e) => { _currentHoverDirection = ResizeDirection.None; };
+        
+        ResizeLeft.PointerPressed += (s, e) => StartResize(ResizeDirection.Left, e);
+        ResizeLeft.PointerEntered += (s, e) => { _currentHoverDirection = ResizeDirection.Left; };
+        ResizeLeft.PointerExited += (s, e) => { _currentHoverDirection = ResizeDirection.None; };
+        
+        ResizeRight.PointerPressed += (s, e) => StartResize(ResizeDirection.Right, e);
+        ResizeRight.PointerEntered += (s, e) => { _currentHoverDirection = ResizeDirection.Right; };
+        ResizeRight.PointerExited += (s, e) => { _currentHoverDirection = ResizeDirection.None; };
+        
+        // Attach to corners
+        ResizeTopLeft.PointerPressed += (s, e) => StartResize(ResizeDirection.TopLeft, e);
+        ResizeTopLeft.PointerEntered += (s, e) => { _currentHoverDirection = ResizeDirection.TopLeft; };
+        ResizeTopLeft.PointerExited += (s, e) => { _currentHoverDirection = ResizeDirection.None; };
+        
+        ResizeTopRight.PointerPressed += (s, e) => StartResize(ResizeDirection.TopRight, e);
+        ResizeTopRight.PointerEntered += (s, e) => { _currentHoverDirection = ResizeDirection.TopRight; };
+        ResizeTopRight.PointerExited += (s, e) => { _currentHoverDirection = ResizeDirection.None; };
+        
+        ResizeBottomLeft.PointerPressed += (s, e) => StartResize(ResizeDirection.BottomLeft, e);
+        ResizeBottomLeft.PointerEntered += (s, e) => { _currentHoverDirection = ResizeDirection.BottomLeft; };
+        ResizeBottomLeft.PointerExited += (s, e) => { _currentHoverDirection = ResizeDirection.None; };
+        
+        ResizeBottomRight.PointerPressed += (s, e) => StartResize(ResizeDirection.BottomRight, e);
+        ResizeBottomRight.PointerEntered += (s, e) => { _currentHoverDirection = ResizeDirection.BottomRight; };
+        ResizeBottomRight.PointerExited += (s, e) => { _currentHoverDirection = ResizeDirection.None; };
+        
+        // Attach pointer moved and released to root for tracking during resize
+        var root = (UIElement)this.Content;
+        root.PointerMoved += OnResizePointerMoved;
+        root.PointerReleased += OnResizePointerReleased;
+    }
+    
+    
+    private enum ResizeDirection
+    {
+        None,
+        Left,
+        Right,
+        Top,
+        Bottom,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight
+    }
+    
+    private bool _isResizing = false;
+    private ResizeDirection _resizeDirection = ResizeDirection.None;
+    private ResizeDirection _currentHoverDirection = ResizeDirection.None;
+    private Windows.Graphics.PointInt32 _resizeStartScreenPoint;
+    private Windows.Graphics.RectInt32 _windowStartBounds;
+    private DispatcherTimer _cursorTimer;
+    
+    // Window procedure hook
+    private IntPtr _oldWndProc = IntPtr.Zero;
+    private NativeInterop.WndProcDelegate _newWndProc;
+    private IntPtr _currentCursor = IntPtr.Zero;
+    
+    private void StartResize(ResizeDirection direction, PointerRoutedEventArgs e)
+    {
+        _isResizing = true;
+        _resizeDirection = direction;
+        
+        // Get screen coordinates for accurate tracking
+        NativeInterop.GetCursorPos(out _resizeStartScreenPoint);
+        
+        // Get current window bounds
+        if (GetWindowRect(_hwnd, out RECT rect))
+        {
+            _windowStartBounds = new Windows.Graphics.RectInt32
+            {
+                X = rect.Left,
+                Y = rect.Top,
+                Width = rect.Right - rect.Left,
+                Height = rect.Bottom - rect.Top
+            };
+        }
+        
+        ((UIElement)this.Content).CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+    
+    private void OnResizePointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_isResizing) return;
+        
+        // Get current screen coordinates
+        NativeInterop.GetCursorPos(out Windows.Graphics.PointInt32 currentScreenPos);
+        PerformResize(currentScreenPos);
+        
+        e.Handled = true;
+    }
+    
+    private void OnResizePointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_isResizing)
+        {
+            _isResizing = false;
+            _resizeDirection = ResizeDirection.None;
+            _currentHoverDirection = ResizeDirection.None;
+            ((UIElement)sender).ReleasePointerCaptures();
+            e.Handled = true;
+        }
+    }
+    
+    private void PerformResize(Windows.Graphics.PointInt32 currentScreenPos)
+    {
+        // Calculate delta from start position in screen coordinates
+        var deltaX = currentScreenPos.X - _resizeStartScreenPoint.X;
+        var deltaY = currentScreenPos.Y - _resizeStartScreenPoint.Y;
+
+        var newX = _windowStartBounds.X;
+        var newY = _windowStartBounds.Y;
+        var newWidth = _windowStartBounds.Width;
+        var newHeight = _windowStartBounds.Height;
+
+        // Minimum window size
+        const int MIN_WIDTH = 400;
+        const int MIN_HEIGHT = 300;
+
+        switch (_resizeDirection)
+        {
+            case ResizeDirection.Left:
+                newX = _windowStartBounds.X + deltaX;
+                newWidth = _windowStartBounds.Width - deltaX;
+                if (newWidth < MIN_WIDTH)
+                {
+                    newX = _windowStartBounds.X + _windowStartBounds.Width - MIN_WIDTH;
+                    newWidth = MIN_WIDTH;
+                }
+                break;
+
+            case ResizeDirection.Right:
+                newWidth = _windowStartBounds.Width + deltaX;
+                if (newWidth < MIN_WIDTH) newWidth = MIN_WIDTH;
+                break;
+
+            case ResizeDirection.Top:
+                newY = _windowStartBounds.Y + deltaY;
+                newHeight = _windowStartBounds.Height - deltaY;
+                if (newHeight < MIN_HEIGHT)
+                {
+                    newY = _windowStartBounds.Y + _windowStartBounds.Height - MIN_HEIGHT;
+                    newHeight = MIN_HEIGHT;
+                }
+                break;
+
+            case ResizeDirection.Bottom:
+                newHeight = _windowStartBounds.Height + deltaY;
+                if (newHeight < MIN_HEIGHT) newHeight = MIN_HEIGHT;
+                break;
+
+            case ResizeDirection.TopLeft:
+                newX = _windowStartBounds.X + deltaX;
+                newY = _windowStartBounds.Y + deltaY;
+                newWidth = _windowStartBounds.Width - deltaX;
+                newHeight = _windowStartBounds.Height - deltaY;
+                
+                if (newWidth < MIN_WIDTH)
+                {
+                    newX = _windowStartBounds.X + _windowStartBounds.Width - MIN_WIDTH;
+                    newWidth = MIN_WIDTH;
+                }
+                if (newHeight < MIN_HEIGHT)
+                {
+                    newY = _windowStartBounds.Y + _windowStartBounds.Height - MIN_HEIGHT;
+                    newHeight = MIN_HEIGHT;
+                }
+                break;
+
+            case ResizeDirection.TopRight:
+                newY = _windowStartBounds.Y + deltaY;
+                newWidth = _windowStartBounds.Width + deltaX;
+                newHeight = _windowStartBounds.Height - deltaY;
+                
+                if (newWidth < MIN_WIDTH) newWidth = MIN_WIDTH;
+                if (newHeight < MIN_HEIGHT)
+                {
+                    newY = _windowStartBounds.Y + _windowStartBounds.Height - MIN_HEIGHT;
+                    newHeight = MIN_HEIGHT;
+                }
+                break;
+
+            case ResizeDirection.BottomLeft:
+                newX = _windowStartBounds.X + deltaX;
+                newWidth = _windowStartBounds.Width - deltaX;
+                newHeight = _windowStartBounds.Height + deltaY;
+                
+                if (newWidth < MIN_WIDTH)
+                {
+                    newX = _windowStartBounds.X + _windowStartBounds.Width - MIN_WIDTH;
+                    newWidth = MIN_WIDTH;
+                }
+                if (newHeight < MIN_HEIGHT) newHeight = MIN_HEIGHT;
+                break;
+
+            case ResizeDirection.BottomRight:
+                newWidth = _windowStartBounds.Width + deltaX;
+                newHeight = _windowStartBounds.Height + deltaY;
+                
+                if (newWidth < MIN_WIDTH) newWidth = MIN_WIDTH;
+                if (newHeight < MIN_HEIGHT) newHeight = MIN_HEIGHT;
+                break;
+        }
+
+        // Apply the new bounds
+        _appWindow.MoveAndResize(new Windows.Graphics.RectInt32
+        {
+            X = newX,
+            Y = newY,
+            Width = newWidth,
+            Height = newHeight
+        });
     }
 
     #endregion
@@ -960,4 +1391,5 @@ public sealed partial class MainWindow : Window
     }
 
     #endregion
+
 }

@@ -114,11 +114,7 @@ namespace VNC
         private const uint PW_CLIENTONLY = 1;
         private const uint PW_RENDERFULLCONTENT = 2;
         private const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
-        private const uint MONITOR_DEFAULTTONEAREST = 2;
         private const int SW_RESTORE = 9;
-        private const int SW_SHOW = 5;
-        private const int PROCESS_DPI_UNAWARE = 0;
-        private const int PROCESS_SYSTEM_DPI_AWARE = 1;
         private const int PROCESS_PER_MONITOR_DPI_AWARE = 2;
         private const int HALFTONE = 4;
 

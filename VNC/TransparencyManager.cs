@@ -22,6 +22,27 @@ public class TransparencyManager
 
     private int _dragStartX, _dragStartY, _windowStartX, _windowStartY;
     private bool _isDragging = false;
+    
+    // Resize state
+    private bool _isResizing = false;
+    private ResizeDirection _resizeDirection = ResizeDirection.None;
+    private Point _resizeStartPoint;
+    private Windows.Graphics.RectInt32 _windowStartBounds;
+    
+    private const int RESIZE_BORDER_THICKNESS = 8;
+    
+    private enum ResizeDirection
+    {
+        None,
+        Left,
+        Right,
+        Top,
+        Bottom,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight
+    }
 
     public TransparencyManager(
         IntPtr hwnd,
@@ -57,9 +78,9 @@ public class TransparencyManager
             NativeInterop.SetLayeredWindowAttributes(_hwnd, backgroundColor, 255, NativeInterop.LWA_COLORKEY);
         }
 
-        // Remove window chrome (caption and thick frame)
+        // Remove window caption but keep thick frame for resizing
         int style = (int)NativeInterop.GetWindowLong(_hwnd, NativeInterop.GWL_STYLE);
-        style = style & ~(NativeInterop.WS_CAPTION | NativeInterop.WS_THICKFRAME);
+        style = style & ~NativeInterop.WS_CAPTION;
         NativeInterop.SetWindowLong(_hwnd, NativeInterop.GWL_STYLE, (IntPtr)style);
     }
 
@@ -103,6 +124,19 @@ public class TransparencyManager
         _rootElement.PointerPressed += OnPointerPressed;
         _rootElement.PointerMoved += OnPointerMoved;
         _rootElement.PointerReleased += OnPointerReleased;
+        _rootElement.PointerExited += OnPointerExited;
+    }
+    
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
     }
 
     /// <summary>
@@ -114,6 +148,32 @@ public class TransparencyManager
         
         if (properties.IsLeftButtonPressed)
         {
+            var position = e.GetCurrentPoint((UIElement)sender).Position;
+            _resizeDirection = GetResizeDirection(position);
+            
+            // Check if we're in resize area
+            if (_resizeDirection != ResizeDirection.None)
+            {
+                _isResizing = true;
+                _resizeStartPoint = position;
+                
+                // Get current window bounds
+                if (GetWindowRect(_hwnd, out RECT rect))
+                {
+                    _windowStartBounds = new Windows.Graphics.RectInt32
+                    {
+                        X = rect.Left,
+                        Y = rect.Top,
+                        Width = rect.Right - rect.Left,
+                        Height = rect.Bottom - rect.Top
+                    };
+                }
+                
+                ((UIElement)sender).CapturePointer(e.Pointer);
+                e.Handled = true;
+                return;
+            }
+
             ((UIElement)sender).CapturePointer(e.Pointer);
             _windowStartX = _appWindow.Position.X;
             _windowStartY = _appWindow.Position.Y;
@@ -126,11 +186,8 @@ public class TransparencyManager
             // Check if we clicked on the SwapChainPanel for click-through
             if (IsClickOnSwapChainPanel(e, (UIElement)sender))
             {
-                if (_clickThroughToggle?.IsOn == true)
-                {
-                    HandleClickThrough(cursorPos);
-                    return;
-                }
+                HandleClickThrough(cursorPos);
+                return;
             }
 
             _isDragging = true;
@@ -149,6 +206,22 @@ public class TransparencyManager
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
         var properties = e.GetCurrentPoint((UIElement)sender).Properties;
+        var position = e.GetCurrentPoint((UIElement)sender).Position;
+        
+        if (_isResizing)
+        {
+            PerformResize(position);
+            e.Handled = true;
+            return;
+        }
+        
+        // Update cursor based on position when not dragging
+        if (!_isDragging)
+        {
+            var direction = GetResizeDirection(position);
+            UpdateCursor(direction);
+        }
+        
         if (properties.IsLeftButtonPressed && _isDragging)
         {
             Windows.Graphics.PointInt32 cursorPos;
@@ -167,8 +240,29 @@ public class TransparencyManager
     /// </summary>
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        if (_isResizing)
+        {
+            _isResizing = false;
+            _resizeDirection = ResizeDirection.None;
+            ((UIElement)sender).ReleasePointerCaptures();
+            UpdateCursor(ResizeDirection.None);
+            e.Handled = true;
+            return;
+        }
+        
         ((UIElement)sender).ReleasePointerCaptures();
         _isDragging = false;
+    }
+    
+    /// <summary>
+    /// Handles pointer exit events by resetting the cursor.
+    /// </summary>
+    private void OnPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_isResizing)
+        {
+            UpdateCursor(ResizeDirection.None);
+        }
     }
 
     /// <summary>
@@ -191,6 +285,168 @@ public class TransparencyManager
         }
         
         return index > 1;
+    }
+
+    /// <summary>
+    /// Gets the resize direction based on pointer position.
+    /// </summary>
+    private ResizeDirection GetResizeDirection(Point position)
+    {
+        var windowWidth = _rootElement.ActualSize.X;
+        var windowHeight = _rootElement.ActualSize.Y;
+
+        bool isLeft = position.X <= RESIZE_BORDER_THICKNESS;
+        bool isRight = position.X >= windowWidth - RESIZE_BORDER_THICKNESS;
+        bool isTop = position.Y <= RESIZE_BORDER_THICKNESS;
+        bool isBottom = position.Y >= windowHeight - RESIZE_BORDER_THICKNESS;
+
+        // Check corners first (they take priority)
+        if (isTop && isLeft) return ResizeDirection.TopLeft;
+        if (isTop && isRight) return ResizeDirection.TopRight;
+        if (isBottom && isLeft) return ResizeDirection.BottomLeft;
+        if (isBottom && isRight) return ResizeDirection.BottomRight;
+
+        // Check edges
+        if (isLeft) return ResizeDirection.Left;
+        if (isRight) return ResizeDirection.Right;
+        if (isTop) return ResizeDirection.Top;
+        if (isBottom) return ResizeDirection.Bottom;
+
+        return ResizeDirection.None;
+    }
+    
+    /// <summary>
+    /// Updates the cursor based on resize direction.
+    /// </summary>
+    private void UpdateCursor(ResizeDirection direction)
+    {
+        IntPtr cursor = direction switch
+        {
+            ResizeDirection.Left or ResizeDirection.Right => 
+                NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_SIZEWE),
+            ResizeDirection.Top or ResizeDirection.Bottom => 
+                NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_SIZENS),
+            ResizeDirection.TopLeft or ResizeDirection.BottomRight => 
+                NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_SIZENWSE),
+            ResizeDirection.TopRight or ResizeDirection.BottomLeft => 
+                NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_SIZENESW),
+            _ => NativeInterop.LoadCursor(IntPtr.Zero, NativeInterop.IDC_ARROW)
+        };
+
+        NativeInterop.SetCursor(cursor);
+    }
+    
+    /// <summary>
+    /// Performs window resize based on pointer movement.
+    /// </summary>
+    private void PerformResize(Point currentPosition)
+    {
+        // Calculate delta from start position
+        var deltaX = (int)(currentPosition.X - _resizeStartPoint.X);
+        var deltaY = (int)(currentPosition.Y - _resizeStartPoint.Y);
+
+        var newX = _windowStartBounds.X;
+        var newY = _windowStartBounds.Y;
+        var newWidth = _windowStartBounds.Width;
+        var newHeight = _windowStartBounds.Height;
+
+        // Minimum window size
+        const int MIN_WIDTH = 400;
+        const int MIN_HEIGHT = 300;
+
+        switch (_resizeDirection)
+        {
+            case ResizeDirection.Left:
+                newX = _windowStartBounds.X + deltaX;
+                newWidth = _windowStartBounds.Width - deltaX;
+                if (newWidth < MIN_WIDTH)
+                {
+                    newX = _windowStartBounds.X + _windowStartBounds.Width - MIN_WIDTH;
+                    newWidth = MIN_WIDTH;
+                }
+                break;
+
+            case ResizeDirection.Right:
+                newWidth = _windowStartBounds.Width + deltaX;
+                if (newWidth < MIN_WIDTH) newWidth = MIN_WIDTH;
+                break;
+
+            case ResizeDirection.Top:
+                newY = _windowStartBounds.Y + deltaY;
+                newHeight = _windowStartBounds.Height - deltaY;
+                if (newHeight < MIN_HEIGHT)
+                {
+                    newY = _windowStartBounds.Y + _windowStartBounds.Height - MIN_HEIGHT;
+                    newHeight = MIN_HEIGHT;
+                }
+                break;
+
+            case ResizeDirection.Bottom:
+                newHeight = _windowStartBounds.Height + deltaY;
+                if (newHeight < MIN_HEIGHT) newHeight = MIN_HEIGHT;
+                break;
+
+            case ResizeDirection.TopLeft:
+                newX = _windowStartBounds.X + deltaX;
+                newY = _windowStartBounds.Y + deltaY;
+                newWidth = _windowStartBounds.Width - deltaX;
+                newHeight = _windowStartBounds.Height - deltaY;
+                
+                if (newWidth < MIN_WIDTH)
+                {
+                    newX = _windowStartBounds.X + _windowStartBounds.Width - MIN_WIDTH;
+                    newWidth = MIN_WIDTH;
+                }
+                if (newHeight < MIN_HEIGHT)
+                {
+                    newY = _windowStartBounds.Y + _windowStartBounds.Height - MIN_HEIGHT;
+                    newHeight = MIN_HEIGHT;
+                }
+                break;
+
+            case ResizeDirection.TopRight:
+                newY = _windowStartBounds.Y + deltaY;
+                newWidth = _windowStartBounds.Width + deltaX;
+                newHeight = _windowStartBounds.Height - deltaY;
+                
+                if (newWidth < MIN_WIDTH) newWidth = MIN_WIDTH;
+                if (newHeight < MIN_HEIGHT)
+                {
+                    newY = _windowStartBounds.Y + _windowStartBounds.Height - MIN_HEIGHT;
+                    newHeight = MIN_HEIGHT;
+                }
+                break;
+
+            case ResizeDirection.BottomLeft:
+                newX = _windowStartBounds.X + deltaX;
+                newWidth = _windowStartBounds.Width - deltaX;
+                newHeight = _windowStartBounds.Height + deltaY;
+                
+                if (newWidth < MIN_WIDTH)
+                {
+                    newX = _windowStartBounds.X + _windowStartBounds.Width - MIN_WIDTH;
+                    newWidth = MIN_WIDTH;
+                }
+                if (newHeight < MIN_HEIGHT) newHeight = MIN_HEIGHT;
+                break;
+
+            case ResizeDirection.BottomRight:
+                newWidth = _windowStartBounds.Width + deltaX;
+                newHeight = _windowStartBounds.Height + deltaY;
+                
+                if (newWidth < MIN_WIDTH) newWidth = MIN_WIDTH;
+                if (newHeight < MIN_HEIGHT) newHeight = MIN_HEIGHT;
+                break;
+        }
+
+        // Apply the new bounds
+        _appWindow.MoveAndResize(new Windows.Graphics.RectInt32
+        {
+            X = newX,
+            Y = newY,
+            Width = newWidth,
+            Height = newHeight
+        });
     }
 
     /// <summary>

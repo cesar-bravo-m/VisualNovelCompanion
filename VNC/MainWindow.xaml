@@ -16,50 +16,134 @@
 
     <!-- Root layout -->
     <Grid x:Name="RootGridLayout">
-        <!-- Rows: header + content -->
+        <Grid.Resources>
+            <!-- Default style for GridSplitter -->
+            <Style TargetType="local:GridSplitter">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="local:GridSplitter">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}">
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            
+            <!-- Default style for ResizeBorder -->
+            <Style TargetType="local:ResizeBorder">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="local:ResizeBorder">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}">
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </Grid.Resources>
+        
+        <!-- Rows: title bar + content -->
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Columns: transparent area + LLM panel -->
+        <!-- Columns: transparent area + separator + controls column -->
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="TransparentColumn" Width="3*" />
             <ColumnDefinition x:Name="SplitterColumn" Width="5" />
             <ColumnDefinition x:Name="LlmColumn" Width="1*" />
         </Grid.ColumnDefinitions>
 
-        <!-- Header / control area -->
-        <StackPanel x:Name="ControlPanel"
-                    Grid.Row="0"
-                    Grid.ColumnSpan="3"
-                    Margin="20,20,20,0"
-                    Spacing="0">
-            <StackPanel Orientation="Horizontal" Spacing="10">
-                <TextBlock Text="VNCompanion"
-                           Style="{ThemeResource TitleTextBlockStyle}"
-                           VerticalAlignment="Center" />
-                <TextBlock x:Name="StatusText"
-                           Text="Ready for translation."
-                           TextWrapping="Wrap"
-                           Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                           Margin="0,13,0,0" />
-            </StackPanel>
+        <!-- Custom Title Bar -->
+        <Grid x:Name="CustomTitleBar"
+              Grid.Row="0"
+              Grid.ColumnSpan="3"
+              Height="40"
+              Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
 
-            <!-- Controls -->
-            <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0">
-                <Button x:Name="LlmAnalysisButton"
-                        Content="Translate"
-                        Click="LlmAnalysisButton_Click"
-                        IsEnabled="True"
-                        Padding="15,8" />
-                <Button x:Name="SettingsButton"
-                        Content="⚙"
-                        Click="SettingsButton_Click"
-                        Padding="8"
-                        ToolTipService.ToolTip="Open Settings" />
+            <!-- Title -->
+            <TextBlock Text="VNCompanion"
+                       Grid.Column="0"
+                       VerticalAlignment="Center"
+                       Margin="15,0,0,0"
+                       FontSize="13"
+                       FontWeight="SemiBold" />
+
+            <!-- Window Controls -->
+            <StackPanel Grid.Column="1"
+                        Orientation="Horizontal"
+                        Spacing="0">
+                <Button x:Name="MinimizeButton"
+                        Content="&#xE921;"
+                        FontFamily="Segoe MDL2 Assets"
+                        Click="MinimizeButton_Click"
+                        Width="46"
+                        Height="40"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        CornerRadius="0"
+                        FontSize="10"
+                        ToolTipService.ToolTip="Minimize">
+                    <Button.Resources>
+                        <ResourceDictionary>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#33FFFFFF" />
+                            <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="Black" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#19FFFFFF" />
+                            <SolidColorBrush x:Key="ButtonForegroundPressed" Color="Black" />
+                        </ResourceDictionary>
+                    </Button.Resources>
+                </Button>
+                <Button x:Name="MaximizeRestoreButton"
+                        Content="&#xE922;"
+                        FontFamily="Segoe MDL2 Assets"
+                        Click="MaximizeRestoreButton_Click"
+                        Width="46"
+                        Height="40"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        CornerRadius="0"
+                        FontSize="10"
+                        ToolTipService.ToolTip="Maximize">
+                    <Button.Resources>
+                        <ResourceDictionary>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#33FFFFFF" />
+                            <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="Black" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#19FFFFFF" />
+                            <SolidColorBrush x:Key="ButtonForegroundPressed" Color="Black" />
+                        </ResourceDictionary>
+                    </Button.Resources>
+                </Button>
+                <Button x:Name="CloseButton"
+                        Content="&#xE8BB;"
+                        FontFamily="Segoe MDL2 Assets"
+                        Click="CloseButton_Click"
+                        Width="46"
+                        Height="40"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        CornerRadius="0"
+                        FontSize="10"
+                        ToolTipService.ToolTip="Close">
+                    <Button.Resources>
+                        <ResourceDictionary>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#C42B1C" />
+                            <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#A02418" />
+                            <SolidColorBrush x:Key="ButtonForegroundPressed" Color="White" />
+                        </ResourceDictionary>
+                    </Button.Resources>
+                </Button>
             </StackPanel>
-        </StackPanel>
+        </Grid>
 
         <!-- Completely transparent SwapChainPanel for DirectX rendering -->
         <SwapChainPanel x:Name="swapChainPanel1" 
@@ -72,19 +156,15 @@
                     BorderThickness="3" 
                     BorderBrush="Red" 
                     Background="Transparent">
-                <TextBlock Text="DirectX Capture Area" 
-                           HorizontalAlignment="Center" 
-                           VerticalAlignment="Center" />
             </Border>
         </SwapChainPanel>
 
         <!-- Splitter -->
-        <Border x:Name="SplitterBorder"
-                Grid.Row="1"
-                Grid.Column="1"
-                Background="{ThemeResource SystemControlForegroundBaseLowBrush}"
-                Width="1"
-                Margin="0" />
+        <local:GridSplitter x:Name="ColumnSplitter"
+                            Grid.Row="1"
+                            Grid.Column="1"
+                            Background="{ThemeResource SystemControlForegroundBaseLowBrush}"
+                            Margin="0" />
 
         <!-- LLM Analysis Results Panel -->
         <Grid x:Name="LlmPanel"
@@ -95,17 +175,28 @@
               HorizontalAlignment="Stretch">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <!-- Header -->
-            <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,10">
-                <TextBlock Text="Translation"
-                           Style="{ThemeResource SubtitleTextBlockStyle}" />
+            <!-- Controls -->
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10" Margin="0,0,0,10">
+                <Button x:Name="LlmAnalysisButton"
+                        Content="Translate"
+                        Click="LlmAnalysisButton_Click"
+                        IsEnabled="True"
+                        Padding="15,8" />
+                <Button x:Name="SettingsButton"
+                        Content="⚙"
+                        Click="SettingsButton_Click"
+                        Padding="8"
+                        ToolTipService.ToolTip="Open Settings" />
             </StackPanel>
 
+            <!-- Header -->
+
             <!-- Main content with TabView -->
-            <TabView Grid.Row="1" x:Name="MainTabView">
+            <TabView Grid.Row="2" x:Name="MainTabView">
                 <!-- Translation Tab -->
                 <TabViewItem Header="Translation" x:Name="TranslationTab" IsClosable="False">
                     <Grid>
@@ -224,5 +315,86 @@
 
             </TabView>
         </Grid>
+
+        <!-- Invisible resize borders (must be last to have highest z-index) -->
+        <!-- Top border -->
+        <local:ResizeBorder x:Name="ResizeTop" 
+                            Grid.Row="0" 
+                            Grid.RowSpan="2"
+                            Grid.ColumnSpan="3"
+                            Height="8" 
+                            VerticalAlignment="Top"
+                            Direction="Top" />
+        
+        <!-- Bottom border -->
+        <local:ResizeBorder x:Name="ResizeBottom" 
+                            Grid.Row="0" 
+                            Grid.RowSpan="2"
+                            Grid.ColumnSpan="3"
+                            Height="8" 
+                            VerticalAlignment="Bottom"
+                            Direction="Bottom" />
+        
+        <!-- Left border -->
+        <local:ResizeBorder x:Name="ResizeLeft" 
+                            Grid.Row="0" 
+                            Grid.RowSpan="2"
+                            Grid.ColumnSpan="3"
+                            Width="8" 
+                            HorizontalAlignment="Left"
+                            Direction="Left" />
+        
+        <!-- Right border -->
+        <local:ResizeBorder x:Name="ResizeRight" 
+                            Grid.Row="0" 
+                            Grid.RowSpan="2"
+                            Grid.ColumnSpan="3"
+                            Width="8" 
+                            HorizontalAlignment="Right"
+                            Direction="Right" />
+        
+        <!-- Top-Left corner -->
+        <local:ResizeBorder x:Name="ResizeTopLeft" 
+                            Grid.Row="0" 
+                            Grid.RowSpan="2"
+                            Grid.ColumnSpan="3"
+                            Width="16" 
+                            Height="16"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top"
+                            Direction="TopLeft" />
+        
+        <!-- Top-Right corner -->
+        <local:ResizeBorder x:Name="ResizeTopRight" 
+                            Grid.Row="0" 
+                            Grid.RowSpan="2"
+                            Grid.ColumnSpan="3"
+                            Width="16" 
+                            Height="16"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Direction="TopRight" />
+        
+        <!-- Bottom-Left corner -->
+        <local:ResizeBorder x:Name="ResizeBottomLeft" 
+                            Grid.Row="0" 
+                            Grid.RowSpan="2"
+                            Grid.ColumnSpan="3"
+                            Width="16" 
+                            Height="16"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Bottom"
+                            Direction="BottomLeft" />
+        
+        <!-- Bottom-Right corner -->
+        <local:ResizeBorder x:Name="ResizeBottomRight" 
+                            Grid.Row="0" 
+                            Grid.RowSpan="2"
+                            Grid.ColumnSpan="3"
+                            Width="16" 
+                            Height="16"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Bottom"
+                            Direction="BottomRight" />
     </Grid>
 </Window>

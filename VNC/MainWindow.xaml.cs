@@ -59,6 +59,13 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<LogEntry> _logEntries = new();
 
     private AppSettings _appSettings = new AppSettings();
+    
+    // Selection box state
+    private bool _isSelectionMode = false;
+    private bool _isDrawingSelection = false;
+    private Point _selectionStartPoint;
+    private Windows.Graphics.PointInt32 _selectionStartScreenPoint; // Actual cursor position when selection started
+    private Rect? _selectedArea = null;
 
     // P/Invoke declarations for screen capture
     [StructLayout(LayoutKind.Sequential)]
@@ -72,6 +79,19 @@ public sealed partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDpiForWindow(IntPtr hwnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetDC(IntPtr hWnd);
@@ -198,6 +218,9 @@ public sealed partial class MainWindow : Window
         ColumnSplitter.LeftColumn = TransparentColumn;
         ColumnSplitter.RightColumn = LlmColumn;
 
+        // Wire up selection canvas events
+        InitializeSelectionHandlers();
+
         _ = LoadSettingsAsync();
     }
 
@@ -215,6 +238,34 @@ public sealed partial class MainWindow : Window
         if (result == ContentDialogResult.Primary)
         {
             await LoadSettingsAsync();
+        }
+    }
+
+    private void SelectAreaButton_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = !_isSelectionMode;
+        
+        if (_isSelectionMode)
+        {
+            // Entering selection mode - clear any previous selection
+            _selectedArea = null;
+            SelectionRectangle.Visibility = Visibility.Collapsed;
+            
+            SelectAreaButton.Content = "Cancel Selection";
+            SelectionCanvas.IsHitTestVisible = true;
+            LlmAnalysisButton.IsEnabled = false;
+        }
+        else
+        {
+            SelectAreaButton.Content = "Select Area";
+            SelectionCanvas.IsHitTestVisible = false;
+            LlmAnalysisButton.IsEnabled = true;
+            
+            // If canceling without making a selection, hide the rectangle
+            if (!_selectedArea.HasValue)
+            {
+                SelectionRectangle.Visibility = Visibility.Collapsed;
+            }
         }
     }
 
@@ -280,6 +331,99 @@ public sealed partial class MainWindow : Window
 
     #endregion
 
+    #region Selection Box Handlers
+    
+    private void InitializeSelectionHandlers()
+    {
+        SelectionCanvas.PointerPressed += SelectionCanvas_PointerPressed;
+        SelectionCanvas.PointerMoved += SelectionCanvas_PointerMoved;
+        SelectionCanvas.PointerReleased += SelectionCanvas_PointerReleased;
+    }
+    
+    private void SelectionCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_isSelectionMode) return;
+        
+        var point = e.GetCurrentPoint(SelectionCanvas).Position;
+        _selectionStartPoint = point;
+        _isDrawingSelection = true;
+        
+        // Capture the actual screen cursor position at selection start
+        NativeInterop.GetCursorPos(out _selectionStartScreenPoint);
+        
+        // Reset and show rectangle
+        SelectionRectangle.Visibility = Visibility.Visible;
+        Canvas.SetLeft(SelectionRectangle, point.X);
+        Canvas.SetTop(SelectionRectangle, point.Y);
+        SelectionRectangle.Width = 0;
+        SelectionRectangle.Height = 0;
+        
+        SelectionCanvas.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+    
+    private void SelectionCanvas_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_isDrawingSelection) return;
+        
+        var currentPoint = e.GetCurrentPoint(SelectionCanvas).Position;
+        
+        // Calculate the rectangle bounds
+        double left = Math.Min(_selectionStartPoint.X, currentPoint.X);
+        double top = Math.Min(_selectionStartPoint.Y, currentPoint.Y);
+        double width = Math.Abs(currentPoint.X - _selectionStartPoint.X);
+        double height = Math.Abs(currentPoint.Y - _selectionStartPoint.Y);
+        
+        // Update rectangle
+        Canvas.SetLeft(SelectionRectangle, left);
+        Canvas.SetTop(SelectionRectangle, top);
+        SelectionRectangle.Width = width;
+        SelectionRectangle.Height = height;
+        
+        e.Handled = true;
+    }
+    
+    private void SelectionCanvas_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_isDrawingSelection) return;
+        
+        _isDrawingSelection = false;
+        SelectionCanvas.ReleasePointerCaptures();
+        
+        var currentPoint = e.GetCurrentPoint(SelectionCanvas).Position;
+        
+        // Store the selected area in canvas coordinates
+        double left = Math.Min(_selectionStartPoint.X, currentPoint.X);
+        double top = Math.Min(_selectionStartPoint.Y, currentPoint.Y);
+        double width = Math.Abs(currentPoint.X - _selectionStartPoint.X);
+        double height = Math.Abs(currentPoint.Y - _selectionStartPoint.Y);
+        
+        // Only store if the selection has meaningful size
+        if (width > 5 && height > 5)
+        {
+            _selectedArea = new Rect(left, top, width, height);
+            
+            System.Diagnostics.Debug.WriteLine($"=== Selection Stored ===");
+            System.Diagnostics.Debug.WriteLine($"Canvas coords: ({left}, {top}, {width}, {height})");
+            System.Diagnostics.Debug.WriteLine($"Start screen cursor: ({_selectionStartScreenPoint.X}, {_selectionStartScreenPoint.Y})");
+            
+            // Exit selection mode and enable translate
+            _isSelectionMode = false;
+            SelectAreaButton.Content = "Select Area";
+            SelectionCanvas.IsHitTestVisible = false;
+            LlmAnalysisButton.IsEnabled = true;
+        }
+        else
+        {
+            // Selection too small, clear it
+            SelectionRectangle.Visibility = Visibility.Collapsed;
+            _selectedArea = null;
+        }
+        
+        e.Handled = true;
+    }
+    
+    #endregion
 
     private async void LlmAnalysisButton_Click(object sender, RoutedEventArgs e)
     {
@@ -288,12 +432,19 @@ public sealed partial class MainWindow : Window
         LlmAnalysisButton.IsEnabled = false;
             LlmAnalysisButton.Content = "Processing...";
 
-            // Get the screen coordinates of the SwapChainPanel
-            var panelBounds = GetSwapChainPanelScreenBounds();
+            // Get the screen coordinates of the capture area (either selected box or full panel)
+            var panelBounds = GetCaptureAreaScreenBounds();
             if (panelBounds.Width <= 0 || panelBounds.Height <= 0)
             {
                 LlmResultTextBox.Text = "Could not determine the capture area bounds.";
                 return;
+            }
+
+            // Debug: Log the capture area for verification
+            System.Diagnostics.Debug.WriteLine($"Capturing area: X={panelBounds.X}, Y={panelBounds.Y}, W={panelBounds.Width}, H={panelBounds.Height}");
+            if (_selectedArea.HasValue)
+            {
+                System.Diagnostics.Debug.WriteLine($"Selected area (local): X={_selectedArea.Value.X}, Y={_selectedArea.Value.Y}, W={_selectedArea.Value.Width}, H={_selectedArea.Value.Height}");
             }
 
             // Capture the screen region
@@ -303,6 +454,31 @@ public sealed partial class MainWindow : Window
                 LlmResultTextBox.Text = "Screenshot capture failed. Please try again.";
             return;
         }
+
+            // Debug: Save the captured bitmap to verify what's being captured
+            try
+            {
+                var debugPath = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                    $"debug_capture_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                capturedBitmap.Save(debugPath, System.Drawing.Imaging.ImageFormat.Png);
+                System.Diagnostics.Debug.WriteLine($"Debug capture saved to: {debugPath}");
+                
+                // Also save coordinates to a text file
+                var coordsPath = debugPath.Replace(".png", "_coords.txt");
+                var coordsText = $"Capture Details:\n" +
+                    $"Screen bounds: X={panelBounds.X}, Y={panelBounds.Y}, W={panelBounds.Width}, H={panelBounds.Height}\n" +
+                    $"Has selection: {_selectedArea.HasValue}\n";
+                if (_selectedArea.HasValue)
+                {
+                    coordsText += $"Selection canvas coords: X={_selectedArea.Value.X}, Y={_selectedArea.Value.Y}, W={_selectedArea.Value.Width}, H={_selectedArea.Value.Height}\n";
+                }
+                System.IO.File.WriteAllText(coordsPath, coordsText);
+            }
+            catch (Exception debugEx)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to save debug capture: {debugEx.Message}");
+            }
 
             LlmResultTextBox.Text = "Processing...";
 
@@ -478,6 +654,79 @@ public sealed partial class MainWindow : Window
         using var ms = new MemoryStream();
         bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
         return $"data:image/png;base64,{Convert.ToBase64String(ms.ToArray())}";
+    }
+
+    private System.Drawing.Rectangle GetCaptureAreaScreenBounds()
+    {
+        try
+        {
+            // If there's a selected area, calculate screen coordinates dynamically
+            if (_selectedArea.HasValue)
+            {
+                // Get current cursor position of where selection START was in canvas coordinates
+                var transform = SelectionCanvas.TransformToVisual(null);
+                var canvasStartInWindow = transform.TransformPoint(
+                    new Windows.Foundation.Point(_selectionStartPoint.X, _selectionStartPoint.Y)
+                );
+                
+                // Get current window position
+                if (!GetWindowRect(_hwnd, out var windowRect))
+                {
+                    return System.Drawing.Rectangle.Empty;
+                }
+                
+                // Calculate where the start point WOULD BE on screen now
+                int currentStartScreenX = windowRect.Left + (int)canvasStartInWindow.X;
+                int currentStartScreenY = windowRect.Top + (int)canvasStartInWindow.Y;
+                
+                // Calculate the offset between where we clicked and where the transform says we are
+                int offsetX = _selectionStartScreenPoint.X - currentStartScreenX;
+                int offsetY = _selectionStartScreenPoint.Y - currentStartScreenY;
+                
+                // Get the selection top-left in window coordinates
+                var selectionTopLeftInWindow = transform.TransformPoint(
+                    new Windows.Foundation.Point(_selectedArea.Value.X, _selectedArea.Value.Y)
+                );
+                
+                // Get DPI scaling factor
+                uint dpi = (uint)GetDpiForWindow(_hwnd);
+                double scale = dpi / 96.0; // 96 is the standard DPI
+                
+                // Calculate final screen position with offset correction
+                int screenX = windowRect.Left + (int)selectionTopLeftInWindow.X + offsetX;
+                int screenY = windowRect.Top + (int)selectionTopLeftInWindow.Y + offsetY;
+                
+                // Apply DPI scaling to width and height
+                int width = (int)(_selectedArea.Value.Width * scale);
+                int height = (int)(_selectedArea.Value.Height * scale);
+
+                System.Diagnostics.Debug.WriteLine($"=== Capture Area Calculation ===");
+                System.Diagnostics.Debug.WriteLine($"DPI: {dpi}, Scale factor: {scale}");
+                System.Diagnostics.Debug.WriteLine($"Selection canvas coords: ({_selectedArea.Value.X}, {_selectedArea.Value.Y}, {_selectedArea.Value.Width}, {_selectedArea.Value.Height})");
+                System.Diagnostics.Debug.WriteLine($"Start point canvas coords: ({_selectionStartPoint.X}, {_selectionStartPoint.Y})");
+                System.Diagnostics.Debug.WriteLine($"Start point in window: ({canvasStartInWindow.X}, {canvasStartInWindow.Y})");
+                System.Diagnostics.Debug.WriteLine($"Window rect: ({windowRect.Left}, {windowRect.Top})");
+                System.Diagnostics.Debug.WriteLine($"Current start would be at screen: ({currentStartScreenX}, {currentStartScreenY})");
+                System.Diagnostics.Debug.WriteLine($"Original start was at screen: ({_selectionStartScreenPoint.X}, {_selectionStartScreenPoint.Y})");
+                System.Diagnostics.Debug.WriteLine($"Offset: ({offsetX}, {offsetY})");
+                System.Diagnostics.Debug.WriteLine($"Selection top-left in window: ({selectionTopLeftInWindow.X}, {selectionTopLeftInWindow.Y})");
+                System.Diagnostics.Debug.WriteLine($"Scaled dimensions: original ({_selectedArea.Value.Width}, {_selectedArea.Value.Height}) -> scaled ({width}, {height})");
+                System.Diagnostics.Debug.WriteLine($"Final screen coords: ({screenX}, {screenY}, {width}, {height})");
+
+                return new System.Drawing.Rectangle(screenX, screenY, width, height);
+            }
+            else
+            {
+                // Capture the full panel
+                System.Diagnostics.Debug.WriteLine($"=== No Selection - Capturing Full Panel ===");
+                return GetSwapChainPanelScreenBounds();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GetCaptureAreaScreenBounds error: {ex.Message}");
+            return System.Drawing.Rectangle.Empty;
+        }
     }
 
     private System.Drawing.Rectangle GetSwapChainPanelScreenBounds()

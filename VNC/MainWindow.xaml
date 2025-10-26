@@ -146,18 +146,34 @@
         </Grid>
 
         <!-- Completely transparent SwapChainPanel for DirectX rendering -->
-        <SwapChainPanel x:Name="swapChainPanel1" 
-                        Grid.Row="1" 
-                        Grid.Column="0" 
-                        HorizontalAlignment="Stretch" 
-                        VerticalAlignment="Stretch" 
-                        Margin="20,20,20,20">
-            <Border x:Name="mainBorder" 
-                    BorderThickness="3" 
-                    BorderBrush="Red" 
-                    Background="Transparent">
-            </Border>
-        </SwapChainPanel>
+        <Grid Grid.Row="1" 
+              Grid.Column="0" 
+              HorizontalAlignment="Stretch" 
+              VerticalAlignment="Stretch" 
+              Margin="20,20,20,20">
+            <SwapChainPanel x:Name="swapChainPanel1" 
+                            HorizontalAlignment="Stretch" 
+                            VerticalAlignment="Stretch">
+                <Border x:Name="mainBorder" 
+                        BorderThickness="3" 
+                        Background="Transparent">
+                        <!-- BorderBrush="Red" -->
+                </Border>
+            </SwapChainPanel>
+            
+            <!-- Canvas for drawing selection rectangle -->
+            <Canvas x:Name="SelectionCanvas" 
+                    HorizontalAlignment="Stretch" 
+                    VerticalAlignment="Stretch"
+                    Background="Transparent"
+                    IsHitTestVisible="False">
+                <Rectangle x:Name="SelectionRectangle"
+                           Stroke="Red"
+                           StrokeThickness="2"
+                           Fill="Transparent"
+                           Visibility="Collapsed" />
+            </Canvas>
+        </Grid>
 
         <!-- Splitter -->
         <local:GridSplitter x:Name="ColumnSplitter"
@@ -186,6 +202,11 @@
                         Click="LlmAnalysisButton_Click"
                         IsEnabled="True"
                         Padding="15,8" />
+                <Button x:Name="SelectAreaButton"
+                        Content="Select Area"
+                        Click="SelectAreaButton_Click"
+                        Padding="15,8"
+                        ToolTipService.ToolTip="Draw a box to select translation area" />
                 <Button x:Name="SettingsButton"
                         Content="⚙"
                         Click="SettingsButton_Click"

@@ -1,4 +1,7 @@
 .vs
 VNC/bin/
 VNC/obj/
+VNC/create-portable-package.ps1
+VNC/portable-package/
+test-single-exe/
 Wap/

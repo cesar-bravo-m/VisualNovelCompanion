@@ -455,31 +455,6 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-            // Debug: Save the captured bitmap to verify what's being captured
-            try
-            {
-                var debugPath = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                    $"debug_capture_{DateTime.Now:yyyyMMdd_HHmmss}.png");
-                capturedBitmap.Save(debugPath, System.Drawing.Imaging.ImageFormat.Png);
-                System.Diagnostics.Debug.WriteLine($"Debug capture saved to: {debugPath}");
-                
-                // Also save coordinates to a text file
-                var coordsPath = debugPath.Replace(".png", "_coords.txt");
-                var coordsText = $"Capture Details:\n" +
-                    $"Screen bounds: X={panelBounds.X}, Y={panelBounds.Y}, W={panelBounds.Width}, H={panelBounds.Height}\n" +
-                    $"Has selection: {_selectedArea.HasValue}\n";
-                if (_selectedArea.HasValue)
-                {
-                    coordsText += $"Selection canvas coords: X={_selectedArea.Value.X}, Y={_selectedArea.Value.Y}, W={_selectedArea.Value.Width}, H={_selectedArea.Value.Height}\n";
-                }
-                System.IO.File.WriteAllText(coordsPath, coordsText);
-            }
-            catch (Exception debugEx)
-            {
-                System.Diagnostics.Debug.WriteLine($"Failed to save debug capture: {debugEx.Message}");
-            }
-
             LlmResultTextBox.Text = "Processing...";
 
             // Reload settings to get the latest values

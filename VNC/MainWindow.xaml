@@ -10,60 +10,26 @@
     mc:Ignorable="d"
     Title="VNC">
 
-    <Window.SystemBackdrop>
+    <!--<Window.SystemBackdrop>
         <MicaBackdrop />
-    </Window.SystemBackdrop>
+    </Window.SystemBackdrop>-->
 
     <!-- Root layout -->
     <Grid x:Name="RootGridLayout">
-        <!-- Visual states drive the collapsed/expanded layout -->
-        <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup x:Name="LayoutStates">
-                <!-- Default 3-pane layout -->
-                <VisualState x:Name="Expanded">
-                    <VisualState.Setters>
-                        <Setter Target="ScreenshotScrollViewer.Visibility" Value="Visible"/>
-                        <Setter Target="SplitterBorder.Visibility" Value="Collapsed"/>
-                        <Setter Target="LlmPanel.(Grid.Column)" Value="2"/>
-                        <Setter Target="LlmPanel.(Grid.ColumnSpan)" Value="1"/>
-                        <Setter Target="LlmPanel.HorizontalAlignment" Value="Stretch"/>
-                        <Setter Target="LlmPanel.Width" Value="Auto"/>
-                        <Setter Target="ExpandButton.Visibility" Value="Collapsed"/>
-                        <Setter Target="CollapseButton.Visibility" Value="Visible"/>
-                    </VisualState.Setters>
-                </VisualState>
-
-                <!-- Left-aligned single-pane LLM layout -->
-                <VisualState x:Name="Collapsed">
-                    <VisualState.Setters>
-                        <Setter Target="ScreenshotScrollViewer.Visibility" Value="Collapsed"/>
-                        <Setter Target="SplitterBorder.Visibility" Value="Collapsed"/>
-                        <Setter Target="LlmPanel.(Grid.Column)" Value="0"/>
-                        <Setter Target="LlmPanel.(Grid.ColumnSpan)" Value="3"/>
-                        <Setter Target="LlmPanel.HorizontalAlignment" Value="Stretch"/>
-                        <!-- Force Auto width so any inner Width you add won't reserve right-side space -->
-                        <Setter Target="LlmPanel.Width" Value="Auto"/>
-                        <Setter Target="ExpandButton.Visibility" Value="Visible"/>
-                        <Setter Target="CollapseButton.Visibility" Value="Collapsed"/>
-                    </VisualState.Setters>
-                </VisualState>
-            </VisualStateGroup>
-        </VisualStateManager.VisualStateGroups>
-
         <!-- Rows: header + content -->
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Columns for expanded mode -->
+        <!-- Columns: transparent area + LLM panel -->
         <Grid.ColumnDefinitions>
-            <ColumnDefinition x:Name="ScreenshotColumn" Width="3*" />
+            <ColumnDefinition x:Name="TransparentColumn" Width="3*" />
             <ColumnDefinition x:Name="SplitterColumn" Width="5" />
             <ColumnDefinition x:Name="LlmColumn" Width="1*" />
         </Grid.ColumnDefinitions>
 
-        <!-- Header / control area (tight to content below) -->
+        <!-- Header / control area -->
         <StackPanel x:Name="ControlPanel"
                     Grid.Row="0"
                     Grid.ColumnSpan="3"
@@ -74,89 +40,43 @@
                            Style="{ThemeResource TitleTextBlockStyle}"
                            VerticalAlignment="Center" />
                 <TextBlock x:Name="StatusText"
-                           Text="Click the refresh button to load available windows, then select one to start capture automatically."
+                           Text="Ready for translation."
                            TextWrapping="Wrap"
                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
                            Margin="0,13,0,0" />
             </StackPanel>
 
-            <!-- Collapsible Content -->
-            <StackPanel x:Name="CollapsibleContent">
-                <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0">
-                    <TextBlock x:Name="SelectWindowTextBlock" Text="Select Window:" VerticalAlignment="Center" Margin="0,1,5,0" />
-                    <ComboBox x:Name="WindowsComboBox"
-                              DisplayMemberPath="Title"
-                              SelectionChanged="WindowsComboBox_SelectionChanged"
-                              PlaceholderText="Choose a window..."
-                              Margin="0,3,0,0"
-                              MinWidth="100"
-                              MaxWidth="400" />
-                    <Button x:Name="RefreshWindowsButton"
-                            Content="↻"
-                            Click="RefreshWindowsButton_Click"
-                            Padding="8"
-                            ToolTipService.ToolTip="Refresh window list" />
-                    <Button x:Name="StopCaptureButton"
-                            Content="Stop Capture"
-                            Click="StopCaptureButton_Click"
-                            IsEnabled="False"
-                            Padding="15,8"
-                            Visibility="Collapsed" />
-                    <Button x:Name="LlmAnalysisButton"
-                            Content="Translate"
-                            Click="LlmAnalysisButton_Click"
-                            IsEnabled="False"
-                            Padding="15,8" />
-                    <Button x:Name="SettingsButton"
-                            Content="⚙"
-                            Click="SettingsButton_Click"
-                            Padding="8"
-                            ToolTipService.ToolTip="Open Settings" />
-                    <!--<Button x:Name="NextButton"
-                            Content="Next"
-                            Click="NextButton_Click"
-                            IsEnabled="False"
-                            Padding="15,8" />-->
-                </StackPanel>
+            <!-- Controls -->
+            <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0">
+                <Button x:Name="LlmAnalysisButton"
+                        Content="Translate"
+                        Click="LlmAnalysisButton_Click"
+                        IsEnabled="True"
+                        Padding="15,8" />
+                <Button x:Name="SettingsButton"
+                        Content="⚙"
+                        Click="SettingsButton_Click"
+                        Padding="8"
+                        ToolTipService.ToolTip="Open Settings" />
             </StackPanel>
         </StackPanel>
 
-        <!-- Screenshot Display (left area) -->
-        <ScrollViewer x:Name="ScreenshotScrollViewer"
-                      Grid.Row="1"
-                      Grid.Column="0"
-                      ZoomMode="Enabled"
-                      HorizontalScrollMode="Auto"
-                      VerticalScrollMode="Auto"
-                      HorizontalScrollBarVisibility="Auto"
-                      VerticalScrollBarVisibility="Auto"
-                      Margin="20,0,20,20">
-            <Grid x:Name="ImageContainer">
-                <Image x:Name="ScreenshotImage"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center"
-                       Stretch="Uniform" />
-                <Canvas x:Name="SelectionCanvas"
-                        Background="Transparent"
-                        PointerPressed="SelectionCanvas_PointerPressed"
-                        PointerMoved="SelectionCanvas_PointerMoved"
-                        PointerReleased="SelectionCanvas_PointerReleased">
-                    <Rectangle x:Name="SelectionRectangle"
-                               Stroke="Red"
-                               StrokeThickness="2"
-                               Fill="Transparent"
-                               Visibility="Collapsed"
-                               Canvas.Left="0"
-                               Canvas.Top="0"
-                               Width="100"
-                               Height="100" />
-                    <Ellipse x:Name="TopLeftHandle" Fill="Red" Width="10" Height="10" Visibility="Collapsed" PointerPressed="Handle_PointerPressed" Tag="TopLeft" />
-                    <Ellipse x:Name="TopRightHandle" Fill="Red" Width="10" Height="10" Visibility="Collapsed" PointerPressed="Handle_PointerPressed" Tag="TopRight" />
-                    <Ellipse x:Name="BottomLeftHandle" Fill="Red" Width="10" Height="10" Visibility="Collapsed" PointerPressed="Handle_PointerPressed" Tag="BottomLeft" />
-                    <Ellipse x:Name="BottomRightHandle" Fill="Red" Width="10" Height="10" Visibility="Collapsed" PointerPressed="Handle_PointerPressed" Tag="BottomRight" />
-                </Canvas>
-            </Grid>
-        </ScrollViewer>
+        <!-- Completely transparent SwapChainPanel for DirectX rendering -->
+        <SwapChainPanel x:Name="swapChainPanel1" 
+                        Grid.Row="1" 
+                        Grid.Column="0" 
+                        HorizontalAlignment="Stretch" 
+                        VerticalAlignment="Stretch" 
+                        Margin="20,20,20,20">
+            <Border x:Name="mainBorder" 
+                    BorderThickness="3" 
+                    BorderBrush="Red" 
+                    Background="Transparent">
+                <TextBlock Text="DirectX Capture Area" 
+                           HorizontalAlignment="Center" 
+                           VerticalAlignment="Center" />
+            </Border>
+        </SwapChainPanel>
 
         <!-- Splitter -->
         <Border x:Name="SplitterBorder"
@@ -164,36 +84,22 @@
                 Grid.Column="1"
                 Background="{ThemeResource SystemControlForegroundBaseLowBrush}"
                 Width="1"
-                Visibility="Collapsed"
                 Margin="0" />
 
         <!-- LLM Analysis Results Panel -->
         <Grid x:Name="LlmPanel"
               Grid.Row="1"
               Grid.Column="2"
-              Margin="20,0,20,20"
-              Visibility="Collapsed"
+              Margin="20,20,20,20"
+              Visibility="Visible"
               HorizontalAlignment="Stretch">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <!-- Header with toggle buttons -->
-            <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,10">
-                <!-- Collapse to single-pane -->
-                <Button x:Name="CollapseButton"
-                        Content="◀"
-                        Click="CollapseButton_Click"
-                        Padding="8,4"
-                        ToolTipService.ToolTip="Collapse to single-pane LLM view" />
-                <!-- Expand back to 3-pane -->
-                <Button x:Name="ExpandButton"
-                        Content="▶"
-                        Click="ExpandButton_Click"
-                        Visibility="Collapsed"
-                        Padding="8,4"
-                        ToolTipService.ToolTip="Expand to 3-pane view" />
+            <!-- Header -->
+            <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,10">
                 <TextBlock Text="Translation"
                            Style="{ThemeResource SubtitleTextBlockStyle}" />
             </StackPanel>

@@ -11,6 +11,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
+using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 using Windows.Graphics;
 using System.Runtime.InteropServices;
@@ -47,8 +48,18 @@ public class LogEntry
 
 public sealed partial class MainWindow : Window
 {
-    private SizeInt32 _prevWindowSize;
-    private bool _hasPrevWindowSize = false;
+    private IntPtr _hwnd;
+    private Microsoft.UI.Windowing.AppWindow _appWindow;
+    private Microsoft.UI.Windowing.OverlappedPresenter _presenter;
+
+    private DirectXManager _directXManager;
+    private TransparencyManager _transparencyManager;
+    private readonly ObservableCollection<WordDefinition> _wordDefinitions = new();
+    private readonly ObservableCollection<LogEntry> _logEntries = new();
+
+    private AppSettings _appSettings = new AppSettings();
+
+    // P/Invoke declarations for screen capture
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
     {
@@ -57,50 +68,35 @@ public sealed partial class MainWindow : Window
         public int Right;
         public int Bottom;
     }
-    [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
 
     [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(nint hWnd);
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
     [DllImport("user32.dll")]
-    private static extern bool SetCursorPos(int x, int y);
+    private static extern IntPtr GetDC(IntPtr hWnd);
 
     [DllImport("user32.dll")]
-    private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, nint dwExtraInfo);
+    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
 
-    [DllImport("user32.dll")]
-    private static extern nint GetForegroundWindow();
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
 
-    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
 
-    private static int GetWindowOuterHeight(nint hwnd)
-    {
-        if (hwnd == nint.Zero) return 0;
-        if (!GetWindowRect(hwnd, out var rc)) return 0;
-        return Math.Max(0, rc.Bottom - rc.Top);
-    }
-    private readonly ObservableCollection<WindowInfo> _availableWindows = new();
-    private readonly ObservableCollection<WordDefinition> _wordDefinitions = new();
-    private readonly ObservableCollection<LogEntry> _logEntries = new();
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
 
-    private WindowInfo? _selectedWindow;
-    private DispatcherTimer? _windowMonitorTimer;
-    private DispatcherTimer? _captureTimer;
+    [DllImport("gdi32.dll")]
+    private static extern bool BitBlt(IntPtr hdc, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
 
-    private System.Drawing.Bitmap? _currentScreenshotBitmap;
-    private bool _isCapturing = false;
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(IntPtr hdc);
 
-    private bool _isDrawingRectangle = false;
-    private bool _isResizingRectangle = false;
-    private Point _startPoint;
-    private string _currentHandle = "";
-    private Rect _selectionRect = Rect.Empty;
-    private bool _hasSelection = false;
-    private bool _hasDefaultRectangle = false;
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
 
-    private AppSettings _appSettings = new AppSettings();
+    private const uint SRCCOPY = 0x00CC0020;
 
     public const int ICON_SMALL = 0;  
     public const int ICON_BIG = 1;  
@@ -116,108 +112,42 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
 
-        IntPtr hWnd = WinRT.Interop.WindowNative.GetWindowHandle(this);  
+        // Get window handle and configure window
+        _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        Microsoft.UI.WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(_hwnd);
+        _appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
+
+        // Configure window presenter
+        _presenter = _appWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter;
+        _presenter.IsResizable = true;
+        _presenter.SetBorderAndTitleBar(true, false);
+
+        // Set initial window size and position
+        // _appWindow.Resize(new Windows.Graphics.SizeInt32(800, 500));
+        // _appWindow.Move(new Windows.Graphics.PointInt32(500, 300));
+
+        // Set window corner preference for Windows 11
+        SetWindowCornerPreference();
+
+        // Initialize DirectX rendering
+        InitializeDirectX();
+
+        // Initialize transparency and click-through functionality
+        InitializeTransparency();
+
         string sExe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? "";  
         System.Drawing.Icon? ico = System.Drawing.Icon.ExtractAssociatedIcon(sExe);  
         if (ico != null)
-            SendMessage(hWnd, WM_SETICON, ICON_BIG, ico.Handle);  
+            SendMessage(_hwnd, WM_SETICON, ICON_BIG, ico.Handle);  
 
-        WindowsComboBox.ItemsSource = _availableWindows;
         WordDefinitionsDataGrid.ItemsSource = _wordDefinitions;
         LogDataGrid.ItemsSource = _logEntries;
 
-        _windowMonitorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _windowMonitorTimer.Tick += WindowMonitorTimer_Tick;
-
-        _captureTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _captureTimer.Tick += CaptureTimer_Tick;
-
         this.Closed += MainWindow_Closed;
 
-
-        _ = LoadAvailableWindowsAsync();
         _ = LoadSettingsAsync();
     }
 
-    #region Collapse/Expand
-    private void ApplyCollapsed(bool collapsed)
-    {
-        if (collapsed)
-        {
-            try
-            {
-                _prevWindowSize = this.AppWindow.Size;
-                _hasPrevWindowSize = true;
-            } catch { }
-            int targetHeight = 0;
-            if (_selectedWindow != null)
-            {
-                targetHeight = GetWindowOuterHeight(_selectedWindow.Handle);
-            }
-            if (targetHeight <= 0)
-            {
-                targetHeight = this.AppWindow.Size.Height;
-            }
-            try
-            {
-                const int minHeight = 200;
-                targetHeight = Math.Max(minHeight, targetHeight);
-                this.AppWindow.Resize(new SizeInt32(820, targetHeight));
-            } catch { }
-            ScreenshotScrollViewer.Visibility = Visibility.Collapsed;
-            SplitterBorder.Visibility = Visibility.Collapsed;
-            ScreenshotColumn.Width = new GridLength(0);
-            SplitterColumn.Width   = new GridLength(0);
-            LlmColumn.Width        = new GridLength(1, GridUnitType.Star);
-
-            Grid.SetColumn(LlmPanel, 0);
-            Grid.SetColumnSpan(LlmPanel, 3);
-            LlmPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
-            LlmPanel.Width = double.NaN;
-            ExpandButton.Visibility = Visibility.Visible;
-            CollapseButton.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            try
-            {
-                if (_hasPrevWindowSize && _prevWindowSize.Width > 0 && _prevWindowSize.Height > 0)
-                {
-                    this.AppWindow.Resize(_prevWindowSize);
-                }
-            } catch
-            {
-            }
-            ScreenshotScrollViewer.Visibility = Visibility.Visible;
-            SplitterBorder.Visibility = Visibility.Collapsed; // or Visible if you want the line
-            ScreenshotColumn.Width = new GridLength(3, GridUnitType.Star);
-            SplitterColumn.Width   = new GridLength(5);
-            LlmColumn.Width        = new GridLength(1, GridUnitType.Star);
-
-            Grid.SetColumn(LlmPanel, 2);
-            Grid.SetColumnSpan(LlmPanel, 1);
-            LlmPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
-            LlmPanel.Width = double.NaN;
-            ExpandButton.Visibility = Visibility.Collapsed;
-            CollapseButton.Visibility = Visibility.Visible;
-        }
-    }
-    private void CollapseButton_Click(object sender, RoutedEventArgs e)
-    {
-        ApplyCollapsed(true);
-    }
-
-    private void ExpandButton_Click(object sender, RoutedEventArgs e)
-    {
-        ApplyCollapsed(false);
-    }
-
-    #endregion
-
-    private async void RefreshWindowsButton_Click(object sender, RoutedEventArgs e)
-    {
-        await LoadAvailableWindowsAsync();
-    }
 
     private async void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
@@ -247,242 +177,35 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void StopCaptureButton_Click(object sender, RoutedEventArgs e)
-    {
-        StopCapture();
-    }
-
-    private async void WindowsComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isCapturing) StopCapture();
-
-        if (WindowsComboBox.SelectedItem is WindowInfo selectedWindow)
-        {
-            if (!ScreenshotCapture.IsWindowValid(selectedWindow.Handle))
-            {
-                await HandleWindowClosed();
-                return;
-            }
-
-            _selectedWindow = selectedWindow;
-            StatusText.Text = $"Selected window: '{selectedWindow.Title}'. Starting capture...";
-
-            if (_windowMonitorTimer is { IsEnabled: false })
-                _windowMonitorTimer.Start();
-
-            // Automatically start capture when window is selected
-            try
-            {
-                StartCapture();
-            }
-            catch (Exception ex)
-            {
-                var dialog = new ContentDialog()
-                {
-                    Title = "Capture Error",
-                    Content = $"Failed to start capture: {ex.Message}",
-                    CloseButtonText = "OK",
-                    XamlRoot = this.Content.XamlRoot
-                };
-
-                await dialog.ShowAsync();
-                StatusText.Text = $"Failed to start capture for '{selectedWindow.Title}'.";
-            }
-        }
-        else
-        {
-            _selectedWindow = null;
-            StatusText.Text = "No window selected. Please select a window to start capture.";
-            _windowMonitorTimer?.Stop();
-        }
-    }
-
-    private async Task LoadAvailableWindowsAsync()
-    {
-        try
-        {
-            RefreshWindowsButton.IsEnabled = false;
-            RefreshWindowsButton.Content = "...";
-            StatusText.Text = "Loading available windows...";
-
-            var windows = await ScreenshotCapture.GetVisibleWindowsWithoutThumbnailsAsync();
-
-            _availableWindows.Clear();
-            foreach (var w in windows.Where(w => w.IsValid))
-                _availableWindows.Add(w);
-
-            StatusText.Text = _availableWindows.Count == 0
-                ? "No windows found. Try opening some applications and refresh again."
-                : $"Found {_availableWindows.Count} window(s). Select one to start capture automatically.";
-        }
-        catch (Exception ex)
-        {
-            var dialog = new ContentDialog()
-            {
-                Title = "Error Loading Windows",
-                Content = $"Failed to load available windows: {ex.Message}",
-                CloseButtonText = "OK",
-                XamlRoot = this.Content.XamlRoot
-            };
-            await dialog.ShowAsync();
-            StatusText.Text = "Failed to load windows. Please try again.";
-        }
-        finally
-        {
-            RefreshWindowsButton.IsEnabled = true;
-            RefreshWindowsButton.Content = "↻";
-        }
-    }
-
-    private async void WindowMonitorTimer_Tick(object? sender, object e)
-    {
-        if (_selectedWindow != null &&
-            !ScreenshotCapture.IsWindowValid(_selectedWindow.Handle))
-        {
-            await HandleWindowClosed();
-        }
-    }
-
-    private async void CaptureTimer_Tick(object? sender, object e)
-    {
-        if (_selectedWindow == null || !_isCapturing) return;
-
-        try
-        {
-            if (!ScreenshotCapture.IsWindowValid(_selectedWindow.Handle))
-            {
-                await HandleWindowClosed();
-                return;
-            }
-
-            var screenshotResult = await ScreenshotCapture.CaptureWindowWithBitmapAsync(_selectedWindow.Handle);
-
-            if (ScreenshotCapture.IsBitmapMostlyWhite(screenshotResult.Bitmap))
-            {
-                screenshotResult.Bitmap.Dispose();
-                await Task.Delay(50);
-                return;
-            }
-
-            ScreenshotImage.Source = screenshotResult.BitmapImage;
-
-            _currentScreenshotBitmap?.Dispose();
-            _currentScreenshotBitmap = screenshotResult.Bitmap;
-
-            UpdateSelectionCanvasSize();
-
-            StatusText.Text = $"Capturing '{_selectedWindow.Title}'";
-
-            LlmAnalysisButton.IsEnabled = true;
-        }
-        catch (Exception ex)
-        {
-            StopCapture();
-            StatusText.Text = $"Capture stopped due to error: {ex.Message}";
-        }
-    }
-
-    private void StartCapture()
-    {
-        if (_selectedWindow == null || _isCapturing) return;
-        SelectWindowTextBlock.Visibility = Visibility.Collapsed;
-        WindowsComboBox.Visibility = Visibility.Collapsed;
-        RefreshWindowsButton.Visibility = Visibility.Collapsed;
-        LlmAnalysisButton.IsEnabled = true;
-
-        _isCapturing = true;
-        _captureTimer?.Start();
-
-        // Show the right panel; let the current visual state decide its layout
-        LlmPanel.Visibility = Visibility.Visible;
-
-        // Show the Stop button
-        StopCaptureButton.Visibility = Visibility.Visible;
-        StopCaptureButton.IsEnabled = true;
-        StatusText.Text = $"Started auto-capturing from '{_selectedWindow.Title}'.";
-    }
-
-    private void StopCapture()
-    {
-        if (!_isCapturing) return;
-        SelectWindowTextBlock.Visibility = Visibility.Visible;
-        WindowsComboBox.Visibility = Visibility.Visible;
-        RefreshWindowsButton.Visibility = Visibility.Visible;
-        LlmAnalysisButton.IsEnabled = false;
-
-        _isCapturing = false;
-        _captureTimer?.Stop();
-
-        // Hide LLM panel entirely when not capturing
-        LlmPanel.Visibility = Visibility.Collapsed;
-
-        // Hide the Stop button
-        StopCaptureButton.Visibility = Visibility.Collapsed;
-        StopCaptureButton.IsEnabled = false;
-        StatusText.Text = _selectedWindow != null
-            ? $"Stopped auto-capturing from '{_selectedWindow.Title}'."
-            : "Auto-capture stopped.";
-    }
-
-    private async Task HandleWindowClosed()
-    {
-        _windowMonitorTimer?.Stop();
-        StopCapture();
-
-        var closedTitle = _selectedWindow?.Title ?? "Unknown";
-        _selectedWindow = null;
-        WindowsComboBox.SelectedItem = null;
-        ScreenshotImage.Source = null;
-        LlmAnalysisButton.IsEnabled = false;
-        LlmResultTextBox.Text = string.Empty;
-
-        _wordDefinitions.Clear();
-        _logEntries.Clear();
-        WordDefinitionsHeader.Visibility = Visibility.Collapsed;
-        WordTableScrollViewer.Visibility = Visibility.Collapsed;
-
-        // Reset rectangle state but don't hide it completely
-        _hasSelection = false;
-        _hasDefaultRectangle = false;
-        HideSelection();
-
-        _currentScreenshotBitmap?.Dispose();
-        _currentScreenshotBitmap = null;
-
-        StatusText.Text = $"The selected window '{closedTitle}' has been closed. Please select a different window.";
-
-        var dialog = new ContentDialog()
-        {
-            Title = "Window Closed",
-            Content = $"The selected window '{closedTitle}' has been closed. Please select a different window.",
-            CloseButtonText = "OK",
-            XamlRoot = this.Content.XamlRoot
-        };
-        await dialog.ShowAsync();
-    }
 
     private async void LlmAnalysisButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentScreenshotBitmap == null)
-        {
-            StatusText.Text = "No screenshot available for LLM analysis. Please take a screenshot first.";
-            return;
-        }
-
         try
         {
             LlmAnalysisButton.IsEnabled = false;
             LlmAnalysisButton.Content = "Processing...";
-            StatusText.Text = "Sending image to LLM for analysis...";
+            StatusText.Text = "Capturing screenshot from transparent area...";
 
-            LlmResultTextBox.Text = "Processing...";
-
-            var bitmapToAnalyze = CropBitmapToSelection();
-            if (bitmapToAnalyze == null)
+            // Get the screen coordinates of the SwapChainPanel
+            var panelBounds = GetSwapChainPanelScreenBounds();
+            if (panelBounds.Width <= 0 || panelBounds.Height <= 0)
             {
-                StatusText.Text = "Invalid selection area for LLM analysis.";
+                StatusText.Text = "Invalid capture area. Please ensure the window is visible.";
+                LlmResultTextBox.Text = "Could not determine the capture area bounds.";
                 return;
             }
+
+            // Capture the screen region
+            var capturedBitmap = CaptureScreenRegion(panelBounds);
+            if (capturedBitmap == null)
+            {
+                StatusText.Text = "Failed to capture screenshot.";
+                LlmResultTextBox.Text = "Screenshot capture failed. Please try again.";
+                return;
+            }
+
+            StatusText.Text = "Sending image to LLM for analysis...";
+            LlmResultTextBox.Text = "Processing...";
 
             // Reload settings to get the latest values
             _appSettings = await SettingsManager.LoadSettingsAsync();
@@ -504,7 +227,7 @@ public sealed partial class MainWindow : Window
             {
                 // Use managed service - only IMAGE mode is supported
                 StatusText.Text = "Sending image to managed service for analysis...";
-                var base64Image = ConvertBitmapToBase64(bitmapToAnalyze);
+                var base64Image = ConvertBitmapToBase64(capturedBitmap);
                 llmResult = await ManagedClient.AnalyzeImageAsync(base64Image, "http://172.178.84.127:8080");
             }
             else
@@ -520,6 +243,7 @@ public sealed partial class MainWindow : Window
                     {
                         StatusText.Text = "OCR is not available on this system.";
                         LlmResultTextBox.Text = "OCR functionality is not available on this system. Please ensure Windows OCR features are installed.";
+                        capturedBitmap.Dispose();
                         return;
                     }
                     
@@ -527,19 +251,21 @@ public sealed partial class MainWindow : Window
                     string extractedText;
                     try
                     {
-                        extractedText = await OcrService.ExtractTextFromBitmapAsync(bitmapToAnalyze);
+                        extractedText = await OcrService.ExtractTextFromBitmapAsync(capturedBitmap);
                     }
                     catch (Exception ex)
                     {
                         StatusText.Text = $"OCR failed: {ex.Message}";
                         LlmResultTextBox.Text = $"OCR extraction failed: {ex.Message}";
+                        capturedBitmap.Dispose();
                         return;
                     }
                     
                     if (string.IsNullOrWhiteSpace(extractedText))
                     {
-                        StatusText.Text = "No text detected in the selected area.";
-                        LlmResultTextBox.Text = "No text was detected in the selected area. Please try selecting a different region or switch to Image mode.";
+                        StatusText.Text = "No text detected in the captured area.";
+                        LlmResultTextBox.Text = "No text was detected in the captured area. Please try capturing a different region or switch to Image mode.";
+                        capturedBitmap.Dispose();
                         return;
                     }
                     
@@ -555,7 +281,7 @@ public sealed partial class MainWindow : Window
                 else
                 {
                     // Traditional image-based analysis
-                    var base64Image = ConvertBitmapToBase64(bitmapToAnalyze);
+                    var base64Image = ConvertBitmapToBase64(capturedBitmap);
                     
                     llmResult = await TogetherClient.AnalyzeScreenshotAsync(
                         base64Image,
@@ -634,7 +360,8 @@ public sealed partial class MainWindow : Window
                 WordTableScrollViewer.Visibility = Visibility.Collapsed;
             }
 
-            if (bitmapToAnalyze != _currentScreenshotBitmap) bitmapToAnalyze.Dispose();
+            StatusText.Text = "Translation complete.";
+            capturedBitmap.Dispose();
         }
         catch (Exception ex)
         {
@@ -664,302 +391,95 @@ public sealed partial class MainWindow : Window
         return $"data:image/png;base64,{Convert.ToBase64String(ms.ToArray())}";
     }
 
-    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    private System.Drawing.Rectangle GetSwapChainPanelScreenBounds()
     {
-        _windowMonitorTimer?.Stop();
-        _windowMonitorTimer = null;
-
-        _captureTimer?.Stop();
-        _captureTimer = null;
-
-        _currentScreenshotBitmap?.Dispose();
-        _currentScreenshotBitmap = null;
-    }
-
-    #region Rectangle Selection
-
-    private void UpdateSelectionCanvasSize()
-    {
-        if (ScreenshotImage.Source is BitmapImage)
-        {
-            ScreenshotImage.SizeChanged -= ScreenshotImage_SizeChanged;
-            ScreenshotImage.SizeChanged += ScreenshotImage_SizeChanged;
-            UpdateCanvasSizeToImage();
-        }
-    }
-
-    private void ScreenshotImage_SizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        UpdateCanvasSizeToImage();
-    }
-
-    private void UpdateCanvasSizeToImage()
-    {
-        if (ScreenshotImage.ActualWidth > 0 && ScreenshotImage.ActualHeight > 0)
-        {
-            SelectionCanvas.Width = ScreenshotImage.ActualWidth;
-            SelectionCanvas.Height = ScreenshotImage.ActualHeight;
-
-            // Always show default rectangle if no custom selection exists
-            if (!_hasSelection && !_hasDefaultRectangle)
-            {
-                CreateDefaultRectangle();
-            }
-            else if (_hasSelection || _hasDefaultRectangle)
-            {
-                ShowSelectionRectangle();
-            }
-        }
-    }
-
-    private void CreateDefaultRectangle()
-    {
-        if (SelectionCanvas.Width <= 0 || SelectionCanvas.Height <= 0) return;
-
-        // Create rectangle in lower third of screen with padding (visual novel dialogue position)
-        var padding = 20.0;
-        var rectHeight = SelectionCanvas.Height / 3.0 - padding; // One third minus padding
-        var rectWidth = SelectionCanvas.Width - (2 * padding);
-        var rectX = padding;
-        var rectY = SelectionCanvas.Height - rectHeight - padding; // Position in lower third
-
-        _selectionRect = new Rect(rectX, rectY, rectWidth, rectHeight);
-        _hasDefaultRectangle = true;
-        _hasSelection = true; // Treat default rectangle as a selection
-        
-        ShowSelectionRectangle();
-        StatusText.Text = "Default selection area created. You can resize or move it as needed.";
-    }
-
-    private void SelectionCanvas_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-    {
-        if (sender is not Canvas canvas) return;
-
-        var pos = e.GetCurrentPoint(canvas).Position;
-
-        if (_hasSelection && IsPointInRectangle(pos, _selectionRect))
-        {
-            // Allow moving/dragging the existing rectangle
-            _isDrawingRectangle = false;
-            _isResizingRectangle = false;
-            _startPoint = pos;
-            canvas.CapturePointer(e.Pointer);
-        }
-        else
-        {
-            // Create new rectangle (replacing the existing one)
-            _isDrawingRectangle = true;
-            _isResizingRectangle = false;
-            _startPoint = pos;
-            _selectionRect = new Rect(pos.X, pos.Y, 0, 0);
-            _hasDefaultRectangle = false; // User is creating custom rectangle
-
-            SelectionRectangle.Visibility = Visibility.Visible;
-            Canvas.SetLeft(SelectionRectangle, pos.X);
-            Canvas.SetTop(SelectionRectangle, pos.Y);
-            SelectionRectangle.Width = 0;
-            SelectionRectangle.Height = 0;
-
-            canvas.CapturePointer(e.Pointer);
-        }
-    }
-
-    private void SelectionCanvas_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-    {
-        if (sender is not Canvas canvas) return;
-        var p = e.GetCurrentPoint(canvas).Position;
-
-        if (_isDrawingRectangle)
-        {
-            var left = Math.Min(_startPoint.X, p.X);
-            var top = Math.Min(_startPoint.Y, p.Y);
-            var width = Math.Abs(p.X - _startPoint.X);
-            var height = Math.Abs(p.Y - _startPoint.Y);
-
-            _selectionRect = new Rect(left, top, width, height);
-
-            Canvas.SetLeft(SelectionRectangle, left);
-            Canvas.SetTop(SelectionRectangle, top);
-            SelectionRectangle.Width = width;
-            SelectionRectangle.Height = height;
-        }
-        else if (_isResizingRectangle)
-        {
-            ResizeRectangle(p);
-        }
-    }
-
-    private void SelectionCanvas_PointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-    {
-        if (sender is not Canvas canvas) return;
-
-        if (_isDrawingRectangle)
-        {
-            _isDrawingRectangle = false;
-            _hasSelection = _selectionRect.Width > 5 && _selectionRect.Height > 5;
-
-            if (_hasSelection)
-            {
-                ShowSelectionHandles();
-                StatusText.Text = "Selection area defined. LLM analysis will analyze only the selected region.";
-            }
-            else
-            {
-                // If rectangle is too small, revert to default rectangle instead of hiding
-                CreateDefaultRectangle();
-            }
-        }
-
-        _isResizingRectangle = false;
-        canvas.ReleasePointerCapture(e.Pointer);
-    }
-
-    private void Handle_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-    {
-        if (sender is Ellipse handle && handle.Tag is string tag)
-        {
-            _isResizingRectangle = true;
-            _currentHandle = tag;
-            _startPoint = e.GetCurrentPoint(SelectionCanvas).Position;
-            SelectionCanvas.CapturePointer(e.Pointer);
-            e.Handled = true;
-        }
-    }
-
-    private void ResizeRectangle(Point currentPoint)
-    {
-        var dx = currentPoint.X - _startPoint.X;
-        var dy = currentPoint.Y - _startPoint.Y;
-
-        var newRect = _selectionRect;
-
-        switch (_currentHandle)
-        {
-            case "TopLeft":
-                newRect = new Rect(
-                    Math.Max(0, _selectionRect.X + dx),
-                    Math.Max(0, _selectionRect.Y + dy),
-                    Math.Max(10, _selectionRect.Width - dx),
-                    Math.Max(10, _selectionRect.Height - dy));
-                break;
-            case "TopRight":
-                newRect = new Rect(
-                    _selectionRect.X,
-                    Math.Max(0, _selectionRect.Y + dy),
-                    Math.Max(10, _selectionRect.Width + dx),
-                    Math.Max(10, _selectionRect.Height - dy));
-                break;
-            case "BottomLeft":
-                newRect = new Rect(
-                    Math.Max(0, _selectionRect.X + dx),
-                    _selectionRect.Y,
-                    Math.Max(10, _selectionRect.Width - dx),
-                    Math.Max(10, _selectionRect.Height + dy));
-                break;
-            case "BottomRight":
-                newRect = new Rect(
-                    _selectionRect.X,
-                    _selectionRect.Y,
-                    Math.Max(10, _selectionRect.Width + dx),
-                    Math.Max(10, _selectionRect.Height + dy));
-                break;
-        }
-
-        if (newRect.Right <= SelectionCanvas.Width && newRect.Bottom <= SelectionCanvas.Height)
-        {
-            _selectionRect = newRect;
-            _startPoint = currentPoint;
-            ShowSelectionRectangle();
-        }
-    }
-
-    private void ShowSelectionRectangle()
-    {
-        Canvas.SetLeft(SelectionRectangle, _selectionRect.X);
-        Canvas.SetTop(SelectionRectangle, _selectionRect.Y);
-        SelectionRectangle.Width = _selectionRect.Width;
-        SelectionRectangle.Height = _selectionRect.Height;
-        SelectionRectangle.Visibility = Visibility.Visible;
-
-        ShowSelectionHandles();
-    }
-
-    private void ShowSelectionHandles()
-    {
-        Canvas.SetLeft(TopLeftHandle, _selectionRect.X - 5);
-        Canvas.SetTop(TopLeftHandle, _selectionRect.Y - 5);
-        TopLeftHandle.Visibility = Visibility.Visible;
-
-        Canvas.SetLeft(TopRightHandle, _selectionRect.Right - 5);
-        Canvas.SetTop(TopRightHandle, _selectionRect.Y - 5);
-        TopRightHandle.Visibility = Visibility.Visible;
-
-        Canvas.SetLeft(BottomLeftHandle, _selectionRect.X - 5);
-        Canvas.SetTop(BottomLeftHandle, _selectionRect.Bottom - 5);
-        BottomLeftHandle.Visibility = Visibility.Visible;
-
-        Canvas.SetLeft(BottomRightHandle, _selectionRect.Right - 5);
-        Canvas.SetTop(BottomRightHandle, _selectionRect.Bottom - 5);
-        BottomRightHandle.Visibility = Visibility.Visible;
-    }
-
-    private void HideSelection()
-    {
-        // Never completely hide selection - always maintain a default rectangle
-        if (!_hasDefaultRectangle)
-        {
-            CreateDefaultRectangle();
-        }
-        else
-        {
-            // Just hide handles but keep rectangle visible
-            TopLeftHandle.Visibility = Visibility.Collapsed;
-            TopRightHandle.Visibility = Visibility.Collapsed;
-            BottomLeftHandle.Visibility = Visibility.Collapsed;
-            BottomRightHandle.Visibility = Visibility.Collapsed;
-        }
-    }
-
-    private static bool IsPointInRectangle(Point p, Rect r)
-        => p.X >= r.X && p.X <= r.Right && p.Y >= r.Y && p.Y <= r.Bottom;
-
-    private System.Drawing.Bitmap? CropBitmapToSelection()
-    {
-        if (_currentScreenshotBitmap == null || !_hasSelection)
-            return _currentScreenshotBitmap;
-
         try
         {
-            var scaleX = (double)_currentScreenshotBitmap.Width / SelectionCanvas.Width;
-            var scaleY = (double)_currentScreenshotBitmap.Height / SelectionCanvas.Height;
+            // Get the transform of the SwapChainPanel relative to the window
+            var transform = swapChainPanel1.TransformToVisual(null);
+            var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
+            
+            // Get window position on screen
+            if (!GetWindowRect(_hwnd, out var windowRect))
+            {
+                return System.Drawing.Rectangle.Empty;
+            }
 
-            var cropX = (int)(_selectionRect.X * scaleX);
-            var cropY = (int)(_selectionRect.Y * scaleY);
-            var cropW = (int)(_selectionRect.Width * scaleX);
-            var cropH = (int)(_selectionRect.Height * scaleY);
+            // Calculate the absolute screen position of the panel
+            int screenX = windowRect.Left + (int)point.X;
+            int screenY = windowRect.Top + (int)point.Y;
+            int width = (int)swapChainPanel1.ActualWidth;
+            int height = (int)swapChainPanel1.ActualHeight;
 
-            cropX = Math.Max(0, Math.Min(cropX, _currentScreenshotBitmap.Width - 1));
-            cropY = Math.Max(0, Math.Min(cropY, _currentScreenshotBitmap.Height - 1));
-            cropW = Math.Min(cropW, _currentScreenshotBitmap.Width - cropX);
-            cropH = Math.Min(cropH, _currentScreenshotBitmap.Height - cropY);
-
-            if (cropW <= 0 || cropH <= 0) return null;
-
-            var srcRect = new System.Drawing.Rectangle(cropX, cropY, cropW, cropH);
-            var dst = new System.Drawing.Bitmap(cropW, cropH);
-
-            using var g = System.Drawing.Graphics.FromImage(dst);
-            g.DrawImage(_currentScreenshotBitmap, 0, 0, srcRect, System.Drawing.GraphicsUnit.Pixel);
-
-            return dst;
+            return new System.Drawing.Rectangle(screenX, screenY, width, height);
         }
         catch
         {
-            return _currentScreenshotBitmap;
+            return System.Drawing.Rectangle.Empty;
         }
     }
 
-    #endregion
+    private System.Drawing.Bitmap? CaptureScreenRegion(System.Drawing.Rectangle bounds)
+    {
+        IntPtr screenDc = IntPtr.Zero;
+        IntPtr memoryDc = IntPtr.Zero;
+        IntPtr bitmap = IntPtr.Zero;
+        IntPtr oldBitmap = IntPtr.Zero;
+
+        try
+        {
+            // Get the screen DC
+            screenDc = GetDC(IntPtr.Zero);
+            if (screenDc == IntPtr.Zero)
+                return null;
+
+            // Create a memory DC compatible with the screen DC
+            memoryDc = CreateCompatibleDC(screenDc);
+            if (memoryDc == IntPtr.Zero)
+                return null;
+
+            // Create a bitmap compatible with the screen DC
+            bitmap = CreateCompatibleBitmap(screenDc, bounds.Width, bounds.Height);
+            if (bitmap == IntPtr.Zero)
+                return null;
+
+            // Select the bitmap into the memory DC
+            oldBitmap = SelectObject(memoryDc, bitmap);
+
+            // Copy the screen region to the bitmap
+            if (!BitBlt(memoryDc, 0, 0, bounds.Width, bounds.Height, 
+                       screenDc, bounds.X, bounds.Y, SRCCOPY))
+                return null;
+
+            // Create a GDI+ Bitmap from the GDI bitmap
+            var result = System.Drawing.Image.FromHbitmap(bitmap);
+            
+            return result;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            // Clean up resources
+            if (oldBitmap != IntPtr.Zero)
+                SelectObject(memoryDc, oldBitmap);
+            if (bitmap != IntPtr.Zero)
+                DeleteObject(bitmap);
+            if (memoryDc != IntPtr.Zero)
+                DeleteDC(memoryDc);
+            if (screenDc != IntPtr.Zero)
+                ReleaseDC(IntPtr.Zero, screenDc);
+        }
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        // Clean up DirectX resources
+        _directXManager?.Dispose();
+    }
+
 
     #region Log DataGrid Sorting
 
@@ -1049,54 +569,6 @@ public sealed partial class MainWindow : Window
 
     #endregion
 
-    #region Next Button Handler
-
-    private async void NextButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedWindow == null) return;
-
-        try
-        {
-            // Get the current foreground window (our main window)
-            var currentWindow = GetForegroundWindow();
-
-            // Get the bounds of the selected window
-            if (!GetWindowRect(_selectedWindow.Handle, out var rect))
-                return;
-
-            // Calculate the center point of the selected window
-            var centerX = (rect.Left + rect.Right) / 2;
-            var centerY = (rect.Top + rect.Bottom) / 2;
-
-            // Bring the selected window to foreground
-            SetForegroundWindow(_selectedWindow.Handle);
-
-            // Small delay to ensure window is focused
-            await Task.Delay(100);
-
-            // Set cursor position to center of window
-            SetCursorPos(centerX, centerY);
-
-            // Small delay before clicking
-            await Task.Delay(50);
-
-            // Perform left mouse click
-            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-
-            // Small delay after clicking
-            await Task.Delay(50);
-
-            // Return focus to our main window
-            SetForegroundWindow(currentWindow);
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Failed to click window: {ex.Message}";
-        }
-    }
-
-    #endregion
 
     #region Log Row Click Handler
 
@@ -1363,6 +835,56 @@ public sealed partial class MainWindow : Window
                    .Replace(">", "&gt;")
                    .Replace("\"", "&quot;")
                    .Replace("'", "&#39;");
+    }
+
+    #endregion
+
+    #region Transparency and DirectX Methods
+
+    /// <summary>
+    /// Sets the window corner preference for Windows 11 styling.
+    /// </summary>
+    private void SetWindowCornerPreference()
+    {
+        int cornerPreference = (int)NativeInterop.DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DEFAULT;
+        NativeInterop.DwmSetWindowAttribute(
+            _hwnd,
+            (int)NativeInterop.DWMWINDOWATTRIBUTE.DWMWA_WINDOW_CORNER_PREFERENCE,
+            ref cornerPreference,
+            Marshal.SizeOf(typeof(int)));
+    }
+
+    /// <summary>
+    /// Initializes DirectX resources and binds the swap chain to the SwapChainPanel.
+    /// </summary>
+    private void InitializeDirectX()
+    {
+        _directXManager = new DirectXManager();
+        _directXManager.Initialize();
+
+        // Bind swap chain to SwapChainPanel
+        if (_directXManager.SwapChain != null)
+        {
+            var panelNative = WinRT.CastExtensions.As<NativeInterop.ISwapChainPanelNative>(swapChainPanel1);
+            panelNative.SetSwapChain(_directXManager.SwapChain.NativePointer);
+        }
+    }
+
+    /// <summary>
+    /// Initializes window transparency and click-through functionality.
+    /// </summary>
+    private void InitializeTransparency()
+    {
+        UIElement root = (UIElement)this.Content;
+        
+        _transparencyManager = new TransparencyManager(
+            _hwnd,
+            _appWindow,
+            _presenter,
+            root,
+            null!);
+
+        _transparencyManager.InitializeTransparency();
     }
 
     #endregion

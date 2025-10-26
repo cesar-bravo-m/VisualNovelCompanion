@@ -28,15 +28,16 @@ The app needs an LLM to run, for which there are three options (selectable in-ap
 
 *BYOK* and *Local* modes allow you to choose between two input modalities: Images or OCR.
 
-Images is much more accurate, but uses more tokens and might be slower.
+"Images" is much more accurate, but uses more tokens and might be slower.
 
 OCR uses Windows' built-in OCR model and sends the result for processing to the LLM. It uses far less tokens, but can be inaccurate.
 
 ## Usage
 
 1) Open a visual novel
-2) Open VNC, and choose the window of your visual novel
-3) Click on "Translate" to translate the text and extract vocabulary
+2) Open VNC and place the visual novel window inside the transparent box
+3) (Optional) Click "Select Area" and draw a rectangle around the area where text will appear
+4) Click on "Translate" to translate the text and extract vocabulary
 
 ## Caveats
 
